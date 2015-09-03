@@ -1147,7 +1147,7 @@ const (
 	// cluster, via the ClusterIP.
 	ServiceTypeClusterIP ServiceType = "ClusterIP"
 
-	// ServiceTypeNodePort means a service will be exposed on one port of
+    // ServiceTypeNodePort means a service will be exposed on one port of
 	// every node, in addition to 'ClusterIP' type.
 	ServiceTypeNodePort ServiceType = "NodePort"
 
@@ -1155,6 +1155,10 @@ const (
 	// external load balancer (if the cloud provider supports it), in addition
 	// to 'NodePort' type.
 	ServiceTypeLoadBalancer ServiceType = "LoadBalancer"
+
+    // ServiceTypePrivate means a service will only be accessible inside the
+    // namespace, via the Cluster IP.
+	ServiceTypePrivate ServiceType = "Private"
 )
 
 // ServiceStatus represents the current status of a service
@@ -1200,7 +1204,7 @@ type ServiceSpec struct {
 	// None can be specified for headless services when proxying is not required
 	ClusterIP string `json:"clusterIP,omitempty"`
 
-	// Type determines how the service will be exposed.  Valid options: ClusterIP, NodePort, LoadBalancer
+	// Type determines how the service will be exposed.  Valid options: ClusterIP, NodePort, LoadBalancer, Private
 	Type ServiceType `json:"type,omitempty"`
 
 	// ExternalIPs are used by external load balancers, or can be set by
@@ -1482,10 +1486,26 @@ type NodeList struct {
 	Items []Node `json:"items"`
 }
 
-// NamespaceSpec describes the attributes on a Namespace
+// NamespaceNetworkPolicy determines who is authorized to access pods in the namespace
+type NamespaceNetworkPolicy string
+
+// These are the valid network policies of a namespace
+const(
+// Private namespaces are only accessible by pods within the namespace
+	NamespacePrivate NamespaceNetworkPolicy = "Private"
+// Public namespaces are accessible from anywhere in the cluster
+	NamespacePublic NamespaceNetworkPolicy = "Public"
+)
+
+// NamespaceSpec describes the attributes on a Namespace.
 type NamespaceSpec struct {
-	// Finalizers is an opaque list of values that must be empty to permanently remove object from storage
-	Finalizers []FinalizerName
+	// Finalizers is an opaque list of values that must be empty to permanently remove object from storage.
+	// More info: http://releases.k8s.io/HEAD/docs/design/namespaces.md#finalizers
+	Finalizers []FinalizerName `json:"finalizers,omitempty"`
+
+	// NetworkPolicy determines who is authorized to access pods in the namespace
+	// Must be either Private or Public. Defaults to Public
+	NetworkPolicy NamespaceNetworkPolicy `json:"networkPolicy,omitempty"`
 }
 
 type FinalizerName string

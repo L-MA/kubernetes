@@ -1002,6 +1002,7 @@ func convert_api_NamespaceSpec_To_v1_NamespaceSpec(in *api.NamespaceSpec, out *N
 	} else {
 		out.Finalizers = nil
 	}
+	out.NetworkPolicy = NamespaceNetworkPolicy(in.NetworkPolicy)
 	return nil
 }
 
@@ -3404,6 +3405,7 @@ func convert_v1_NamespaceSpec_To_api_NamespaceSpec(in *NamespaceSpec, out *api.N
 	} else {
 		out.Finalizers = nil
 	}
+	out.NetworkPolicy = api.NamespaceNetworkPolicy(in.NetworkPolicy)
 	return nil
 }
 
