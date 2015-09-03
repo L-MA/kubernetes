@@ -1200,14 +1200,6 @@ func ValidateService(service *api.Service) errs.ValidationErrorList {
 		}
 	}
 
-	if service.Spec.Type == api.ServiceTypePrivate {
-		for i := range service.Spec.Ports {
-			if service.Spec.Ports[i].NodePort != 0 {
-				allErrs = append(allErrs, errs.NewFieldInvalid(fmt.Sprintf("spec.ports[%d].nodePort", i), service.Spec.Ports[i].NodePort, "cannot specify a node port with services of type Private"))
-			}
-		}
-	}
-
 	// Check for duplicate NodePorts, considering (protocol,port) pairs
 	nodePorts := make(map[api.ServicePort]bool)
 	for i := range service.Spec.Ports {
@@ -1225,8 +1217,29 @@ func ValidateService(service *api.Service) errs.ValidationErrorList {
 		nodePorts[key] = true
 	}
 
+	if service.Spec.Type == api.ServiceTypePrivate {
+		for i := range service.Spec.Ports {
+			if service.Spec.Ports[i].NodePort != 0 {
+				allErrs = append(allErrs, errs.NewFieldInvalid(fmt.Sprintf("spec.ports[%d].nodePort", i), service.Spec.Ports[i].NodePort, "cannot specify a node port with services of type Private"))
+			}
+		}
+	}
+
 	return allErrs
 }
+
+// HOW DO WE RUN THIS?!
+/*func validateServicePolicy(service *api.Service, namespace *api.Namespace) errs.ValidationErrorList{
+	allErrs := errs.ValidationErrorList{}
+
+	if service.Spec.Type == api.ServiceTypePrivate {
+		if namespace.Spec.NetworkPolicy == api.NamespacePublic {
+			allErrs = append(allErrs, errs.NewFieldInvalid("service spec.Type", service.Spec.Type, "Cannot have a Private Service Type with a Public Namespace Network Policy"))
+		}
+	}
+
+	return allErrs
+}*/
 
 func validateServicePort(sp *api.ServicePort, requireName bool, allNames *util.StringSet) errs.ValidationErrorList {
 	allErrs := errs.ValidationErrorList{}
@@ -1702,7 +1715,7 @@ func ValidateResourceQuotaStatusUpdate(newResourceQuota, oldResourceQuota *api.R
 	return allErrs
 }
 
-var supportedNamespaceNetworkPolicy = util.NewStringSet(string(api.NamespacePublic), string(api.NamespacePrivate))
+
 
 // ValidateNamespace tests if required fields are set.
 func ValidateNamespace(namespace *api.Namespace) errs.ValidationErrorList {
@@ -1711,6 +1724,15 @@ func ValidateNamespace(namespace *api.Namespace) errs.ValidationErrorList {
 	for i := range namespace.Spec.Finalizers {
 		allErrs = append(allErrs, validateFinalizerName(string(namespace.Spec.Finalizers[i]))...)
 	}
+
+	allErrs = append(allErrs, validateNetworkPolicy(namespace))
+
+	return allErrs
+}
+
+var supportedNamespaceNetworkPolicy = util.NewStringSet(string(api.NamespacePublic), string(api.NamespacePrivate))
+func validateNetworkPolicy(namespace *api.Namespace) errs.ValidationErrorList {
+	allErrs := errs.ValidationErrorList{}
 
 	/*if namespace.Spec.NetworkPolicy == "" {
 		allErrs = append(allErrs, errs.NewFieldRequired("spec.networkPolicy"))
