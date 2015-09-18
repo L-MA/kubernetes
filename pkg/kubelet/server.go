@@ -95,7 +95,7 @@ type HostInterface interface {
 	GetContainerInfo(podFullName string, uid types.UID, containerName string, req *cadvisorApi.ContainerInfoRequest) (*cadvisorApi.ContainerInfo, error)
 	GetContainerRuntimeVersion() (kubecontainer.Version, error)
 	GetRawContainerInfo(containerName string, req *cadvisorApi.ContainerInfoRequest, subcontainers bool) (map[string]*cadvisorApi.ContainerInfo, error)
-	GetCachedMachineInfo() (*cadvisorApi.MachineInfo, error)
+	GetMachineInfo() (*cadvisorApi.MachineInfo, error)
 	GetPods() []*api.Pod
 	GetRunningPods() ([]*api.Pod, error)
 	GetPodByName(namespace, name string) (*api.Pod, bool)
@@ -347,7 +347,7 @@ func (s *Server) getContainerLogs(request *restful.Request, response *restful.Re
 		response.WriteError(http.StatusInternalServerError, fmt.Errorf("unable to convert %v into http.Flusher", response))
 		return
 	}
-	fw := flushwriter.Wrap(response)
+	fw := flushwriter.Wrap(response.ResponseWriter)
 	response.Header().Set("Transfer-Encoding", "chunked")
 	response.WriteHeader(http.StatusOK)
 	err := s.host.GetKubeletContainerLogs(kubecontainer.GetPodFullName(pod), containerName, tail, follow, previous, fw, fw)
@@ -364,7 +364,7 @@ func encodePods(pods []*api.Pod) (data []byte, err error) {
 	for _, pod := range pods {
 		podList.Items = append(podList.Items, *pod)
 	}
-	return latest.Codec.Encode(podList)
+	return latest.GroupOrDie("").Codec.Encode(podList)
 }
 
 // getPods returns a list of pods bound to the Kubelet and their spec.
@@ -407,7 +407,7 @@ func (s *Server) getLogs(request *restful.Request, response *restful.Response) {
 
 // getSpec handles spec requests against the Kubelet.
 func (s *Server) getSpec(request *restful.Request, response *restful.Response) {
-	info, err := s.host.GetCachedMachineInfo()
+	info, err := s.host.GetMachineInfo()
 	if err != nil {
 		response.WriteError(http.StatusInternalServerError, err)
 		return
@@ -543,7 +543,6 @@ WaitForStreams:
 			switch streamType {
 			case api.StreamTypeError:
 				errorStream = stream
-				defer errorStream.Reset()
 				receivedStreams++
 			case api.StreamTypeStdin:
 				stdinStream = stream
@@ -566,11 +565,6 @@ WaitForStreams:
 			glog.Error("Timed out waiting for client to create streams")
 			return nil, nil, nil, nil, nil, false, false
 		}
-	}
-
-	if stdinStream != nil {
-		// close our half of the input stream, since we won't be writing to it
-		stdinStream.Close()
 	}
 
 	return stdinStream, stdoutStream, stderrStream, errorStream, conn, tty, true

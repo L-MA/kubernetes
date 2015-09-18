@@ -39,7 +39,6 @@ import (
 	"k8s.io/kubernetes/pkg/capabilities"
 	client "k8s.io/kubernetes/pkg/client/unversioned"
 	"k8s.io/kubernetes/pkg/cloudprovider"
-	explatest "k8s.io/kubernetes/pkg/expapi/latest"
 	"k8s.io/kubernetes/pkg/master"
 	"k8s.io/kubernetes/pkg/master/ports"
 	"k8s.io/kubernetes/pkg/storage"
@@ -57,7 +56,7 @@ const (
 	// Set to a value larger than the timeouts in each watch server.
 	ReadWriteTimeout = time.Minute * 60
 	//TODO: This can be tightened up. It still matches objects named watch or proxy.
-	defaultLongRunningRequestRE = "(/|^)((watch|proxy)(/|$)|(logs|portforward|exec)/?$)"
+	defaultLongRunningRequestRE = "(/|^)((watch|proxy)(/|$)|(logs?|portforward|exec|attach)/?$)"
 )
 
 // APIServer runs a kubernetes api server.
@@ -68,13 +67,11 @@ type APIServer struct {
 	AdvertiseAddress           net.IP
 	SecurePort                 int
 	ExternalHost               string
-	APIRate                    float32
-	APIBurst                   int
 	TLSCertFile                string
 	TLSPrivateKeyFile          string
 	CertDirectory              string
 	APIPrefix                  string
-	ExpAPIPrefix               string
+	APIGroupPrefix             string
 	StorageVersion             string
 	ExpStorageVersion          string
 	CloudProvider              string
@@ -107,6 +104,7 @@ type APIServer struct {
 	KubeletConfig              client.KubeletConfig
 	ClusterName                string
 	EnableProfiling            bool
+	EnableWatchCache           bool
 	MaxRequestsInFlight        int
 	MinRequestTimeout          int
 	LongRunningRequestRE       string
@@ -122,10 +120,8 @@ func NewAPIServer() *APIServer {
 		InsecureBindAddress:    net.ParseIP("127.0.0.1"),
 		BindAddress:            net.ParseIP("0.0.0.0"),
 		SecurePort:             6443,
-		APIRate:                10.0,
-		APIBurst:               200,
 		APIPrefix:              "/api",
-		ExpAPIPrefix:           "/experimental",
+		APIGroupPrefix:         "/apis",
 		EventTTL:               1 * time.Hour,
 		AuthorizationMode:      "AlwaysAllow",
 		AdmissionControl:       "AlwaysAdmit",
@@ -161,7 +157,7 @@ func (s *APIServer) AddFlags(fs *pflag.FlagSet) {
 		"The IP address on which to serve the --insecure-port (set to 0.0.0.0 for all interfaces). "+
 		"Defaults to localhost.")
 	fs.IPVar(&s.InsecureBindAddress, "address", s.InsecureBindAddress, "DEPRECATED: see --insecure-bind-address instead")
-	fs.MarkDeprecated("address", "see --insecure-bind-address instread")
+	fs.MarkDeprecated("address", "see --insecure-bind-address instead")
 	fs.IPVar(&s.BindAddress, "bind-address", s.BindAddress, ""+
 		"The IP address on which to serve the --read-only-port and --secure-port ports. The "+
 		"associated interface(s) must be reachable by the rest of the cluster, and by CLI/web "+
@@ -176,8 +172,6 @@ func (s *APIServer) AddFlags(fs *pflag.FlagSet) {
 	fs.IntVar(&s.SecurePort, "secure-port", s.SecurePort, ""+
 		"The port on which to serve HTTPS with authentication and authorization. If 0, "+
 		"don't serve HTTPS at all.")
-	fs.Float32Var(&s.APIRate, "api-rate", s.APIRate, "API rate limit as QPS for the read only port")
-	fs.IntVar(&s.APIBurst, "api-burst", s.APIBurst, "API burst amount for the read only port")
 	fs.StringVar(&s.TLSCertFile, "tls-cert-file", s.TLSCertFile, ""+
 		"File containing x509 Certificate for HTTPS.  (CA cert, if any, concatenated after server cert). "+
 		"If HTTPS serving is enabled, and --tls-cert-file and --tls-private-key-file are not provided, "+
@@ -186,7 +180,7 @@ func (s *APIServer) AddFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&s.CertDirectory, "cert-dir", s.CertDirectory, "The directory where the TLS certs are located (by default /var/run/kubernetes). "+
 		"If --tls-cert-file and --tls-private-key-file are provided, this flag will be ignored.")
 	fs.StringVar(&s.APIPrefix, "api-prefix", s.APIPrefix, "The prefix for API requests on the server. Default '/api'.")
-	fs.StringVar(&s.ExpAPIPrefix, "experimental-prefix", s.ExpAPIPrefix, "The prefix for experimental API requests on the server. Default '/experimental'.")
+	fs.MarkDeprecated("api-prefix", "--api-prefix is deprecated and will be removed when the v1 API is retired")
 	fs.StringVar(&s.StorageVersion, "storage-version", s.StorageVersion, "The version to store resources with. Defaults to server preferred")
 	fs.StringVar(&s.CloudProvider, "cloud-provider", s.CloudProvider, "The provider for cloud services.  Empty string for no provider.")
 	fs.StringVar(&s.CloudConfigFile, "cloud-config", s.CloudConfigFile, "The path to the cloud provider configuration file.  Empty string for no configuration file.")
@@ -203,7 +197,7 @@ func (s *APIServer) AddFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&s.ServiceAccountKeyFile, "service-account-key-file", s.ServiceAccountKeyFile, "File containing PEM-encoded x509 RSA private or public key, used to verify ServiceAccount tokens. If unspecified, --tls-private-key-file is used.")
 	fs.BoolVar(&s.ServiceAccountLookup, "service-account-lookup", s.ServiceAccountLookup, "If true, validate ServiceAccount tokens exist in etcd as part of authentication.")
 	fs.StringVar(&s.KeystoneURL, "experimental-keystone-url", s.KeystoneURL, "If passed, activates the keystone authentication plugin")
-	fs.StringVar(&s.AuthorizationMode, "authorization-mode", s.AuthorizationMode, "Selects how to do authorization on the secure port.  One of: "+strings.Join(apiserver.AuthorizationModeChoices, ","))
+	fs.StringVar(&s.AuthorizationMode, "authorization-mode", s.AuthorizationMode, "Ordered list of plug-ins to do authorization on secure port. Comma-delimited list of: "+strings.Join(apiserver.AuthorizationModeChoices, ","))
 	fs.StringVar(&s.AuthorizationPolicyFile, "authorization-policy-file", s.AuthorizationPolicyFile, "File with authorization policy in csv format, used with --authorization-mode=ABAC, on the secure port.")
 	fs.StringVar(&s.AdmissionControl, "admission-control", s.AdmissionControl, "Ordered list of plug-ins to do admission control of resources into cluster. Comma-delimited list of: "+strings.Join(admission.GetPlugins(), ", "))
 	fs.StringVar(&s.AdmissionControlConfigFile, "admission-control-config-file", s.AdmissionControlConfigFile, "File with admission control configuration.")
@@ -222,6 +216,8 @@ func (s *APIServer) AddFlags(fs *pflag.FlagSet) {
 	fs.Var(&s.RuntimeConfig, "runtime-config", "A set of key=value pairs that describe runtime configuration that may be passed to the apiserver. api/<version> key can be used to turn on/off specific api versions. api/all and api/legacy are special keys to control all and legacy api versions respectively.")
 	fs.StringVar(&s.ClusterName, "cluster-name", s.ClusterName, "The instance prefix for the cluster")
 	fs.BoolVar(&s.EnableProfiling, "profiling", true, "Enable profiling via web interface host:port/debug/pprof/")
+	// TODO: enable cache in integration tests.
+	fs.BoolVar(&s.EnableWatchCache, "watch-cache", true, "Enable watch caching in the apiserver")
 	fs.StringVar(&s.ExternalHost, "external-hostname", "", "The hostname to use when generating externalized URLs for this master (e.g. Swagger API Docs.)")
 	fs.IntVar(&s.MaxRequestsInFlight, "max-requests-inflight", 400, "The maximum number of requests in flight at a given time.  When the server exceeds this, it rejects requests.  Zero for no limit.")
 	fs.IntVar(&s.MinRequestTimeout, "min-request-timeout", 1800, "An optional field indicating the minimum number of seconds a handler must keep a request open before timing it out. Currently only honored by the watch request handler, which picks a randomized value above this number as the connection timeout, to spread out load.")
@@ -233,7 +229,7 @@ func (s *APIServer) AddFlags(fs *pflag.FlagSet) {
 	fs.BoolVar(&s.KubeletConfig.EnableHttps, "kubelet-https", s.KubeletConfig.EnableHttps, "Use https for kubelet connections")
 	fs.UintVar(&s.KubeletConfig.Port, "kubelet-port", s.KubeletConfig.Port, "Kubelet port")
 	fs.DurationVar(&s.KubeletConfig.HTTPTimeout, "kubelet-timeout", s.KubeletConfig.HTTPTimeout, "Timeout for kubelet operations")
-	fs.StringVar(&s.KubeletConfig.CertFile, "kubelet-client-certificate", s.KubeletConfig.CertFile, "Path to a client key file for TLS.")
+	fs.StringVar(&s.KubeletConfig.CertFile, "kubelet-client-certificate", s.KubeletConfig.CertFile, "Path to a client cert file for TLS.")
 	fs.StringVar(&s.KubeletConfig.KeyFile, "kubelet-client-key", s.KubeletConfig.KeyFile, "Path to a client key file for TLS.")
 	fs.StringVar(&s.KubeletConfig.CAFile, "kubelet-certificate-authority", s.KubeletConfig.CAFile, "Path to a cert. file for the certificate authority.")
 }
@@ -296,6 +292,7 @@ func (s *APIServer) Run(_ []string) error {
 		// TODO(vmarmol): Implement support for HostNetworkSources.
 		PrivilegedSources: capabilities.PrivilegedSources{
 			HostNetworkSources: []string{},
+			HostPIDSources:     []string{},
 		},
 		PerConnectionBandwidthLimitBytesPerSec: s.MaxConnectionBytesPerSec,
 	})
@@ -343,13 +340,21 @@ func (s *APIServer) Run(_ []string) error {
 		glog.Fatalf("Invalid server address: %v", err)
 	}
 
-	etcdStorage, err := newEtcd(s.EtcdConfigFile, s.EtcdServerList, latest.InterfacesFor, latest.Version, s.StorageVersion, s.EtcdPathPrefix)
+	etcdStorage, err := newEtcd(s.EtcdConfigFile, s.EtcdServerList, latest.GroupOrDie("").InterfacesFor, latest.GroupOrDie("").Version, s.StorageVersion, s.EtcdPathPrefix)
 	if err != nil {
 		glog.Fatalf("Invalid storage version or misconfigured etcd: %v", err)
 	}
-	expEtcdStorage, err := newEtcd(s.EtcdConfigFile, s.EtcdServerList, explatest.InterfacesFor, explatest.Version, s.ExpStorageVersion, s.EtcdPathPrefix)
-	if err != nil {
-		glog.Fatalf("Invalid experimental storage version or misconfigured etcd: %v", err)
+
+	var expEtcdStorage storage.Interface
+	if enableExp {
+		g, err := latest.Group("experimental")
+		if err != nil {
+			glog.Fatalf("experimental API is enabled in runtime config, but not enabled in the environment variable KUBE_API_VERSIONS. Error: %v", err)
+		}
+		expEtcdStorage, err = newEtcd(s.EtcdConfigFile, s.EtcdServerList, g.InterfacesFor, g.Version, s.ExpStorageVersion, s.EtcdPathPrefix)
+		if err != nil {
+			glog.Fatalf("Invalid experimental storage version or misconfigured etcd: %v", err)
+		}
 	}
 
 	n := s.ServiceClusterIPRange
@@ -380,7 +385,8 @@ func (s *APIServer) Run(_ []string) error {
 		glog.Fatalf("Invalid Authentication Config: %v", err)
 	}
 
-	authorizer, err := apiserver.NewAuthorizerFromAuthorizationConfig(s.AuthorizationMode, s.AuthorizationPolicyFile)
+	authorizationModeNames := strings.Split(s.AuthorizationMode, ",")
+	authorizer, err := apiserver.NewAuthorizerFromAuthorizationConfig(authorizationModeNames, s.AuthorizationPolicyFile)
 	if err != nil {
 		glog.Fatalf("Invalid Authorization Config: %v", err)
 	}
@@ -429,9 +435,10 @@ func (s *APIServer) Run(_ []string) error {
 		EnableUISupport:        true,
 		EnableSwaggerSupport:   true,
 		EnableProfiling:        s.EnableProfiling,
+		EnableWatchCache:       s.EnableWatchCache,
 		EnableIndex:            true,
 		APIPrefix:              s.APIPrefix,
-		ExpAPIPrefix:           s.ExpAPIPrefix,
+		APIGroupPrefix:         s.APIGroupPrefix,
 		CorsAllowedOriginList:  s.CorsAllowedOriginList,
 		ReadWritePort:          s.SecurePort,
 		PublicAddress:          s.AdvertiseAddress,
@@ -500,23 +507,24 @@ func (s *APIServer) Run(_ []string) error {
 		}
 
 		glog.Infof("Serving securely on %s", secureLocation)
+		if s.TLSCertFile == "" && s.TLSPrivateKeyFile == "" {
+			s.TLSCertFile = path.Join(s.CertDirectory, "apiserver.crt")
+			s.TLSPrivateKeyFile = path.Join(s.CertDirectory, "apiserver.key")
+			// TODO (cjcullen): Is PublicAddress the right address to sign a cert with?
+			alternateIPs := []net.IP{config.ServiceReadWriteIP}
+			alternateDNS := []string{"kubernetes.default.svc", "kubernetes.default", "kubernetes"}
+			// It would be nice to set a fqdn subject alt name, but only the kubelets know, the apiserver is clueless
+			// alternateDNS = append(alternateDNS, "kubernetes.default.svc.CLUSTER.DNS.NAME")
+			if err := util.GenerateSelfSignedCert(config.PublicAddress.String(), s.TLSCertFile, s.TLSPrivateKeyFile, alternateIPs, alternateDNS); err != nil {
+				glog.Errorf("Unable to generate self signed cert: %v", err)
+			} else {
+				glog.Infof("Using self-signed cert (%s, %s)", s.TLSCertFile, s.TLSPrivateKeyFile)
+			}
+		}
+
 		go func() {
 			defer util.HandleCrash()
 			for {
-				if s.TLSCertFile == "" && s.TLSPrivateKeyFile == "" {
-					s.TLSCertFile = path.Join(s.CertDirectory, "apiserver.crt")
-					s.TLSPrivateKeyFile = path.Join(s.CertDirectory, "apiserver.key")
-					// TODO (cjcullen): Is PublicAddress the right address to sign a cert with?
-					alternateIPs := []net.IP{config.ServiceReadWriteIP}
-					alternateDNS := []string{"kubernetes.default.svc", "kubernetes.default", "kubernetes"}
-					// It would be nice to set a fqdn subject alt name, but only the kubelets know, the apiserver is clueless
-					// alternateDNS = append(alternateDNS, "kubernetes.default.svc.CLUSTER.DNS.NAME")
-					if err := util.GenerateSelfSignedCert(config.PublicAddress.String(), s.TLSCertFile, s.TLSPrivateKeyFile, alternateIPs, alternateDNS); err != nil {
-						glog.Errorf("Unable to generate self signed cert: %v", err)
-					} else {
-						glog.Infof("Using self-signed cert (%s, %s)", s.TLSCertFile, s.TLSPrivateKeyFile)
-					}
-				}
 				// err == systemd.SdNotifyNoSocket when not running on a systemd system
 				if err := systemd.SdNotify("READY=1\n"); err != nil && err != systemd.SdNotifyNoSocket {
 					glog.Errorf("Unable to send systemd daemon successful start message: %v\n", err)

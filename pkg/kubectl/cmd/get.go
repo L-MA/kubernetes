@@ -39,7 +39,7 @@ const (
 Possible resource types include (case insensitive): pods (po), services (svc),
 replicationcontrollers (rc), nodes (no), events (ev), componentstatuses (cs),
 limitranges (limits), persistentvolumes (pv), persistentvolumeclaims (pvc),
-resourcequotas (quota), namespaces (ns), endpoints (ep) or secrets.
+resourcequotas (quota), namespaces (ns), endpoints (ep), serviceaccounts or secrets.
 
 By specifying the output as 'template' and providing a Go template as the value
 of the --template flag, you can filter the attributes of the fetched resource(s).`
@@ -74,12 +74,18 @@ $ kubectl get rc/web service/frontend pods/web-pod-13je7`
 // NewCmdGet creates a command object for the generic "get" action, which
 // retrieves one or more resources from a server.
 func NewCmdGet(f *cmdutil.Factory, out io.Writer) *cobra.Command {
-	p := kubectl.NewHumanReadablePrinter(false, false, false, false, []string{})
-	validArgs := p.HandledResources()
 	options := &GetOptions{}
 
+	// retrieve a list of handled resources from printer as valid args
+	validArgs := []string{}
+	p, err := f.Printer(nil, false, false, false, false, []string{})
+	cmdutil.CheckErr(err)
+	if p != nil {
+		validArgs = p.HandledResources()
+	}
+
 	cmd := &cobra.Command{
-		Use:     "get [(-o|--output=)json|yaml|template|templatefile|wide|jsonpath|...] (TYPE [NAME | -l label] | TYPE/NAME ...) [flags]",
+		Use:     "get [(-o|--output=)json|yaml|wide|go-template=...|go-template-file=...|jsonpath=...|jsonpath-file=...] (TYPE [NAME | -l label] | TYPE/NAME ...) [flags]",
 		Short:   "Display one or many resources",
 		Long:    get_long,
 		Example: get_example,
@@ -130,6 +136,7 @@ func RunGet(f *cmdutil.Factory, out io.Writer, cmd *cobra.Command, args []string
 			SingleResourceType().
 			Latest().
 			Do()
+		err := r.Err()
 		if err != nil {
 			return err
 		}

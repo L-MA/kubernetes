@@ -39,7 +39,7 @@ func NewSimpleFake(objects ...runtime.Object) *Fake {
 	}
 
 	fakeClient := &Fake{}
-	fakeClient.AddReactor("*", "*", ObjectReaction(o, latest.RESTMapper))
+	fakeClient.AddReactor("*", "*", ObjectReaction(o, latest.GroupOrDie("").RESTMapper))
 
 	return fakeClient
 }
@@ -54,6 +54,8 @@ type Fake struct {
 	ReactionChain []Reactor
 	// WatchReactionChain is the list of watch reactors that will be attempted for every request in the order they are tried
 	WatchReactionChain []WatchReactor
+	// ProxyReactionChain is the list of proxy reactors that will be attempted for every request in the order they are tried
+	ProxyReactionChain []ProxyReactor
 }
 
 // Reactor is an interface to allow the composition of reaction functions.
@@ -72,6 +74,14 @@ type WatchReactor interface {
 	React(action Action) (handled bool, ret watch.Interface, err error)
 }
 
+// ProxyReactor is an interface to allow the composition of proxy get functions.
+type ProxyReactor interface {
+	// Handles indicates whether or not this Reactor deals with a given action
+	Handles(action Action) bool
+	// React handles a watch action and returns results.  It may choose to delegate by indicated handled=false
+	React(action Action) (handled bool, ret client.ResponseWrapper, err error)
+}
+
 // ReactionFunc is a function that returns an object or error for a given Action.  If "handled" is false,
 // then the test client will continue ignore the results and continue to the next ReactionFunc
 type ReactionFunc func(action Action) (handled bool, ret runtime.Object, err error)
@@ -79,6 +89,10 @@ type ReactionFunc func(action Action) (handled bool, ret runtime.Object, err err
 // WatchReactionFunc is a function that returns a watch interface.  If "handled" is false,
 // then the test client will continue ignore the results and continue to the next ReactionFunc
 type WatchReactionFunc func(action Action) (handled bool, ret watch.Interface, err error)
+
+// ProxyReactionFunc is a function that returns a ResponseWrapper interface for a given Action.  If "handled" is false,
+// then the test client will continue ignore the results and continue to the next ProxyReactionFunc
+type ProxyReactionFunc func(action Action) (handled bool, ret client.ResponseWrapper, err error)
 
 // AddReactor appends a reactor to the end of the chain
 func (c *Fake) AddReactor(verb, resource string, reaction ReactionFunc) {
@@ -95,6 +109,11 @@ func (c *Fake) PrependReactor(verb, resource string, reaction ReactionFunc) {
 // AddWatchReactor appends a reactor to the end of the chain
 func (c *Fake) AddWatchReactor(resource string, reaction WatchReactionFunc) {
 	c.WatchReactionChain = append(c.WatchReactionChain, &SimpleWatchReactor{resource, reaction})
+}
+
+// AddProxyReactor appends a reactor to the end of the chain
+func (c *Fake) AddProxyReactor(resource string, reaction ProxyReactionFunc) {
+	c.ProxyReactionChain = append(c.ProxyReactionChain, &SimpleProxyReactor{resource, reaction})
 }
 
 // Invokes records the provided Action and then invokes the ReactFn (if provided).
@@ -142,6 +161,28 @@ func (c *Fake) InvokesWatch(action Action) (watch.Interface, error) {
 	return nil, fmt.Errorf("unhandled watch: %#v", action)
 }
 
+// InvokesProxy records the provided Action and then invokes the ReactFn (if provided).
+func (c *Fake) InvokesProxy(action Action) client.ResponseWrapper {
+	c.Lock()
+	defer c.Unlock()
+
+	c.actions = append(c.actions, action)
+	for _, reactor := range c.ProxyReactionChain {
+		if !reactor.Handles(action) {
+			continue
+		}
+
+		handled, ret, err := reactor.React(action)
+		if !handled || err != nil {
+			continue
+		}
+
+		return ret
+	}
+
+	return nil
+}
+
 // ClearActions clears the history of actions called on the fake client
 func (c *Fake) ClearActions() {
 	c.Lock()
@@ -169,10 +210,6 @@ func (c *Fake) ResourceQuotas(namespace string) client.ResourceQuotaInterface {
 
 func (c *Fake) ReplicationControllers(namespace string) client.ReplicationControllerInterface {
 	return &FakeReplicationControllers{Fake: c, Namespace: namespace}
-}
-
-func (c *Fake) Daemons(namespace string) client.DaemonInterface {
-	return &FakeDaemons{Fake: c, Namespace: namespace}
 }
 
 func (c *Fake) Nodes() client.NodeInterface {
@@ -219,6 +256,10 @@ func (c *Fake) Namespaces() client.NamespaceInterface {
 	return &FakeNamespaces{Fake: c}
 }
 
+func (c *Fake) Experimental() client.ExperimentalInterface {
+	return &FakeExperimental{c}
+}
+
 func (c *Fake) ServerVersion() (*version.Info, error) {
 	action := ActionImpl{}
 	action.Verb = "get"
@@ -240,4 +281,28 @@ func (c *Fake) ServerAPIVersions() (*api.APIVersions, error) {
 
 func (c *Fake) ComponentStatuses() client.ComponentStatusInterface {
 	return &FakeComponentStatuses{Fake: c}
+}
+
+type FakeExperimental struct {
+	*Fake
+}
+
+func (c *FakeExperimental) DaemonSets(namespace string) client.DaemonSetInterface {
+	return &FakeDaemonSets{Fake: c, Namespace: namespace}
+}
+
+func (c *FakeExperimental) HorizontalPodAutoscalers(namespace string) client.HorizontalPodAutoscalerInterface {
+	return &FakeHorizontalPodAutoscalers{Fake: c, Namespace: namespace}
+}
+
+func (c *FakeExperimental) Deployments(namespace string) client.DeploymentInterface {
+	return &FakeDeployments{Fake: c, Namespace: namespace}
+}
+
+func (c *FakeExperimental) Scales(namespace string) client.ScaleInterface {
+	return &FakeScales{Fake: c, Namespace: namespace}
+}
+
+func (c *FakeExperimental) Jobs(namespace string) client.JobInterface {
+	panic("unimplemented")
 }

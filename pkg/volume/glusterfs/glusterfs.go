@@ -17,8 +17,8 @@ limitations under the License.
 package glusterfs
 
 import (
-	"math/rand"
 	"os"
+	"path"
 
 	"github.com/golang/glog"
 	"k8s.io/kubernetes/pkg/api"
@@ -54,7 +54,8 @@ func (plugin *glusterfsPlugin) Name() string {
 }
 
 func (plugin *glusterfsPlugin) CanSupport(spec *volume.Spec) bool {
-	return spec.VolumeSource.Glusterfs != nil || spec.PersistentVolumeSource.Glusterfs != nil
+	return (spec.PersistentVolume != nil && spec.PersistentVolume.Spec.Glusterfs != nil) ||
+		(spec.Volume != nil && spec.Volume.Glusterfs != nil)
 }
 
 func (plugin *glusterfsPlugin) GetAccessModes() []api.PersistentVolumeAccessMode {
@@ -81,10 +82,10 @@ func (plugin *glusterfsPlugin) NewBuilder(spec *volume.Spec, pod *api.Pod, _ vol
 func (plugin *glusterfsPlugin) getGlusterVolumeSource(spec *volume.Spec) (*api.GlusterfsVolumeSource, bool) {
 	// Glusterfs volumes used directly in a pod have a ReadOnly flag set by the pod author.
 	// Glusterfs volumes used as a PersistentVolume gets the ReadOnly flag indirectly through the persistent-claim volume used to mount the PV
-	if spec.VolumeSource.Glusterfs != nil {
-		return spec.VolumeSource.Glusterfs, spec.VolumeSource.Glusterfs.ReadOnly
+	if spec.Volume != nil && spec.Volume.Glusterfs != nil {
+		return spec.Volume.Glusterfs, spec.Volume.Glusterfs.ReadOnly
 	} else {
-		return spec.PersistentVolumeSource.Glusterfs, spec.ReadOnly
+		return spec.PersistentVolume.Spec.Glusterfs, spec.ReadOnly
 	}
 }
 
@@ -92,7 +93,7 @@ func (plugin *glusterfsPlugin) newBuilderInternal(spec *volume.Spec, ep *api.End
 	source, readOnly := plugin.getGlusterVolumeSource(spec)
 	return &glusterfsBuilder{
 		glusterfs: &glusterfs{
-			volName: spec.Name,
+			volName: spec.Name(),
 			mounter: mounter,
 			pod:     pod,
 			plugin:  plugin,
@@ -220,12 +221,23 @@ func (b *glusterfsBuilder) setUpAtInternal(dir string) error {
 		options = append(options, "ro")
 	}
 
-	l := len(b.hosts.Subsets)
+	p := path.Join(b.glusterfs.plugin.host.GetPluginDir(glusterfsPluginName), b.glusterfs.volName)
+	if err := os.MkdirAll(p, 0750); err != nil {
+		return err
+	}
+	log := path.Join(p, "glusterfs.log")
+	options = append(options, "log-file="+log)
+
+	addr := make(map[string]struct{})
+	for _, s := range b.hosts.Subsets {
+		for _, a := range s.Addresses {
+			addr[a.IP] = struct{}{}
+		}
+	}
+
 	// Avoid mount storm, pick a host randomly.
-	start := rand.Int() % l
 	// Iterate all hosts until mount succeeds.
-	for i := start; i < start+l; i++ {
-		hostIP := b.hosts.Subsets[i%l].Addresses[0].IP
+	for hostIP := range addr {
 		errs = b.mounter.Mount(hostIP+":"+b.path, dir, "glusterfs", options)
 		if errs == nil {
 			return nil

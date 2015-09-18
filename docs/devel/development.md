@@ -96,7 +96,7 @@ git push -f origin myfeature
 
 ### Creating a pull request
 
-1. Visit http://github.com/$YOUR_GITHUB_USERNAME/kubernetes
+1. Visit https://github.com/$YOUR_GITHUB_USERNAME/kubernetes
 2. Click the "Compare and pull request" button next to your "myfeature" branch.
 3. Check out the pull request [process](pull-requests.md) for more details
 
@@ -111,6 +111,8 @@ pass tests independently, but it is worth striving for.  For mass automated
 fixups (e.g. automated doc formatting), use one or more commits for the
 changes to tooling and a final commit to apply the fixup en masse.  This makes
 reviews much easier.
+
+See [Faster Reviews](faster_reviews.md) for more details.
 
 ## godep and dependency management
 

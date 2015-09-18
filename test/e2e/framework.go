@@ -67,9 +67,13 @@ func (f *Framework) beforeEach() {
 
 	f.Namespace = namespace
 
-	By("Waiting for a default service account to be provisioned in namespace")
-	err = waitForDefaultServiceAccountInNamespace(c, namespace.Name)
-	Expect(err).NotTo(HaveOccurred())
+	if testContext.VerifyServiceAccount {
+		By("Waiting for a default service account to be provisioned in namespace")
+		err = waitForDefaultServiceAccountInNamespace(c, namespace.Name)
+		Expect(err).NotTo(HaveOccurred())
+	} else {
+		Logf("Skipping waiting for service account")
+	}
 }
 
 // afterEach deletes the namespace, after reading its events.
@@ -112,12 +116,7 @@ func (f *Framework) WaitForPodRunning(podName string) error {
 
 // Runs the given pod and verifies that the output of exact container matches the desired output.
 func (f *Framework) TestContainerOutput(scenarioName string, pod *api.Pod, containerIndex int, expectedOutput []string) {
-	testContainerOutput(scenarioName, f.Client, pod, containerIndex, expectedOutput, f.Namespace.Name)
-}
-
-// Runs the given pod and verifies that the output of exact container matches the desired regexps.
-func (f *Framework) TestContainerOutputRegexp(scenarioName string, pod *api.Pod, containerIndex int, expectedOutput []string) {
-	testContainerOutputRegexp(scenarioName, f.Client, pod, containerIndex, expectedOutput, f.Namespace.Name)
+	testContainerOutputInNamespace(scenarioName, f.Client, pod, containerIndex, expectedOutput, f.Namespace.Name)
 }
 
 // WaitForAnEndpoint waits for at least one endpoint to become available in the

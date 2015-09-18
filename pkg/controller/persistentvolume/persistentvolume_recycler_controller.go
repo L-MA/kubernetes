@@ -22,8 +22,8 @@ import (
 
 	"github.com/golang/glog"
 	"k8s.io/kubernetes/pkg/api"
+	"k8s.io/kubernetes/pkg/client/cache"
 	client "k8s.io/kubernetes/pkg/client/unversioned"
-	"k8s.io/kubernetes/pkg/client/unversioned/cache"
 	"k8s.io/kubernetes/pkg/cloudprovider"
 	"k8s.io/kubernetes/pkg/controller/framework"
 	"k8s.io/kubernetes/pkg/fields"
@@ -34,6 +34,8 @@ import (
 	"k8s.io/kubernetes/pkg/volume"
 	"k8s.io/kubernetes/pkg/watch"
 )
+
+var _ volume.VolumeHost = &PersistentVolumeRecycler{}
 
 // PersistentVolumeRecycler is a controller that watches for PersistentVolumes that are released from their claims.
 // This controller will Recycle those volumes whose reclaim policy is set to PersistentVolumeReclaimRecycle and make them

@@ -25,7 +25,7 @@ import (
 	. "github.com/onsi/ginkgo"
 )
 
-var _ = Describe("Downwar dAPI volume", func() {
+var _ = Describe("Downward API volume", func() {
 	f := NewFramework("downward-api")
 
 	It("should provide labels and annotations files", func() {
@@ -86,7 +86,7 @@ var _ = Describe("Downwar dAPI volume", func() {
 				RestartPolicy: api.RestartPolicyNever,
 			},
 		}
-		testContainerOutput("downward API volume plugin", f.Client, pod, 0, []string{
+		testContainerOutputInNamespace("downward API volume plugin", f.Client, pod, 0, []string{
 			fmt.Sprintf("cluster=\"rack10\"\n"),
 			fmt.Sprintf("builder=\"john-doe\"\n"),
 			fmt.Sprintf("%s\n", podName),

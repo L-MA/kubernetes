@@ -20,17 +20,19 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/golang/glog"
 	"k8s.io/kubernetes/pkg/api"
+	"k8s.io/kubernetes/pkg/client/record"
 	client "k8s.io/kubernetes/pkg/client/unversioned"
-	"k8s.io/kubernetes/pkg/client/unversioned/record"
 	"k8s.io/kubernetes/pkg/cloudprovider"
 	"k8s.io/kubernetes/pkg/fields"
 	"k8s.io/kubernetes/pkg/labels"
 	"k8s.io/kubernetes/pkg/types"
 	"k8s.io/kubernetes/pkg/util"
+	"k8s.io/kubernetes/pkg/util/sets"
 )
 
 var (
@@ -57,7 +59,7 @@ type NodeController struct {
 	cloud                   cloudprovider.Interface
 	clusterCIDR             *net.IPNet
 	deletingPodsRateLimiter util.RateLimiter
-	knownNodeSet            util.StringSet
+	knownNodeSet            sets.String
 	kubeClient              client.Interface
 	// Method for easy mocking in unittest.
 	lookupIP func(host string) ([]net.IP, error)
@@ -88,7 +90,9 @@ type NodeController struct {
 	// to aviod the problem with time skew across the cluster.
 	nodeStatusMap map[string]nodeStatusData
 	now           func() util.Time
-	// worker that evicts pods from unresponsive nodes.
+	// Lock to access evictor workers
+	evictorLock *sync.Mutex
+	// workers that evicts pods from unresponsive nodes.
 	podEvictor         *RateLimitedTimedQueue
 	terminationEvictor *RateLimitedTimedQueue
 	podEvictionTimeout time.Duration
@@ -120,15 +124,17 @@ func NewNodeController(
 	if allocateNodeCIDRs && clusterCIDR == nil {
 		glog.Fatal("NodeController: Must specify clusterCIDR if allocateNodeCIDRs == true.")
 	}
+	evictorLock := sync.Mutex{}
 	return &NodeController{
 		cloud:                  cloud,
-		knownNodeSet:           make(util.StringSet),
+		knownNodeSet:           make(sets.String),
 		kubeClient:             kubeClient,
 		recorder:               recorder,
 		podEvictionTimeout:     podEvictionTimeout,
 		maximumGracePeriod:     5 * time.Minute,
-		podEvictor:             NewRateLimitedTimedQueue(podEvictionLimiter, false),
-		terminationEvictor:     NewRateLimitedTimedQueue(podEvictionLimiter, false),
+		evictorLock:            &evictorLock,
+		podEvictor:             NewRateLimitedTimedQueue(podEvictionLimiter),
+		terminationEvictor:     NewRateLimitedTimedQueue(podEvictionLimiter),
 		nodeStatusMap:          make(map[string]nodeStatusData),
 		nodeMonitorGracePeriod: nodeMonitorGracePeriod,
 		nodeMonitorPeriod:      nodeMonitorPeriod,
@@ -162,6 +168,8 @@ func (nc *NodeController) Run(period time.Duration) {
 	//    c. If there are pods still terminating, wait for their estimated completion
 	//       before retrying
 	go util.Until(func() {
+		nc.evictorLock.Lock()
+		defer nc.evictorLock.Unlock()
 		nc.podEvictor.Try(func(value TimedValue) (bool, time.Duration) {
 			remaining, err := nc.deletePods(value.Value)
 			if err != nil {
@@ -178,6 +186,8 @@ func (nc *NodeController) Run(period time.Duration) {
 	// TODO: replace with a controller that ensures pods that are terminating complete
 	// in a particular time period
 	go util.Until(func() {
+		nc.evictorLock.Lock()
+		defer nc.evictorLock.Unlock()
 		nc.terminationEvictor.Try(func(value TimedValue) (bool, time.Duration) {
 			completed, remaining, err := nc.terminatePods(value.Value, value.AddedAt)
 			if err != nil {
@@ -202,8 +212,8 @@ func (nc *NodeController) Run(period time.Duration) {
 }
 
 // Generates num pod CIDRs that could be assigned to nodes.
-func generateCIDRs(clusterCIDR *net.IPNet, num int) util.StringSet {
-	res := util.NewStringSet()
+func generateCIDRs(clusterCIDR *net.IPNet, num int) sets.String {
+	res := sets.NewString()
 	cidrIP := clusterCIDR.IP.To4()
 	for i := 0; i < num; i++ {
 		// TODO: Make the CIDRs configurable.
@@ -247,7 +257,7 @@ func (nc *NodeController) monitorNodeStatus() error {
 	// If there's a difference between lengths of known Nodes and observed nodes
 	// we must have removed some Node.
 	if len(nc.knownNodeSet) != len(nodes.Items) {
-		observedSet := make(util.StringSet)
+		observedSet := make(sets.String)
 		for _, node := range nodes.Items {
 			observedSet.Insert(node.Name)
 		}
@@ -407,7 +417,7 @@ func (nc *NodeController) recordNodeStatusChange(node *api.Node, new_status stri
 }
 
 // For a given node checks its conditions and tries to update it. Returns grace period to which given node
-// is entitled, state of current and last observed Ready Condition, and an error if it ocured.
+// is entitled, state of current and last observed Ready Condition, and an error if it occurred.
 func (nc *NodeController) tryUpdateNodeStatus(node *api.Node) (time.Duration, api.NodeCondition, *api.NodeCondition, error) {
 	var err error
 	var gracePeriod time.Duration
@@ -505,7 +515,8 @@ func (nc *NodeController) tryUpdateNodeStatus(node *api.Node) (time.Duration, ap
 			node.Status.Conditions = append(node.Status.Conditions, api.NodeCondition{
 				Type:               api.NodeReady,
 				Status:             api.ConditionUnknown,
-				Reason:             fmt.Sprintf("Kubelet never posted node status."),
+				Reason:             "NodeStatusNeverUpdated",
+				Message:            fmt.Sprintf("Kubelet never posted node status."),
 				LastHeartbeatTime:  node.CreationTimestamp,
 				LastTransitionTime: nc.now(),
 			})
@@ -514,7 +525,8 @@ func (nc *NodeController) tryUpdateNodeStatus(node *api.Node) (time.Duration, ap
 				node.Name, nc.now().Time.Sub(savedNodeStatus.probeTimestamp.Time), lastReadyCondition)
 			if lastReadyCondition.Status != api.ConditionUnknown {
 				readyCondition.Status = api.ConditionUnknown
-				readyCondition.Reason = fmt.Sprintf("Kubelet stopped posting node status.")
+				readyCondition.Reason = "NodeStatusUnknown"
+				readyCondition.Message = fmt.Sprintf("Kubelet stopped posting node status.")
 				// LastProbeTime is the last time we heard from kubelet.
 				readyCondition.LastHeartbeatTime = lastReadyCondition.LastHeartbeatTime
 				readyCondition.LastTransitionTime = nc.now()
@@ -551,15 +563,23 @@ func (nc *NodeController) hasPods(nodeName string) (bool, error) {
 // evictPods queues an eviction for the provided node name, and returns false if the node is already
 // queued for eviction.
 func (nc *NodeController) evictPods(nodeName string) bool {
+	nc.evictorLock.Lock()
+	defer nc.evictorLock.Unlock()
 	return nc.podEvictor.Add(nodeName)
 }
 
 // cancelPodEviction removes any queued evictions, typically because the node is available again. It
 // returns true if an eviction was queued.
 func (nc *NodeController) cancelPodEviction(nodeName string) bool {
+	nc.evictorLock.Lock()
+	defer nc.evictorLock.Unlock()
 	wasDeleting := nc.podEvictor.Remove(nodeName)
 	wasTerminating := nc.terminationEvictor.Remove(nodeName)
-	return wasDeleting || wasTerminating
+	if wasDeleting || wasTerminating {
+		glog.V(2).Infof("Cancelling pod Eviction on Node: %v", nodeName)
+		return true
+	}
+	return false
 }
 
 // deletePods will delete all pods from master running on given node, and return true

@@ -20,31 +20,28 @@ import (
 	"testing"
 
 	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/rest/resttest"
-	"k8s.io/kubernetes/pkg/api/testapi"
-	"k8s.io/kubernetes/pkg/expapi"
-	// Ensure that expapi/v1 package is initialized.
-	_ "k8s.io/kubernetes/pkg/expapi/v1"
+	"k8s.io/kubernetes/pkg/apis/experimental"
+	// Ensure that experimental/v1 package is initialized.
+	_ "k8s.io/kubernetes/pkg/apis/experimental/v1"
+	"k8s.io/kubernetes/pkg/fields"
+	"k8s.io/kubernetes/pkg/labels"
 	"k8s.io/kubernetes/pkg/registry/registrytest"
 	"k8s.io/kubernetes/pkg/runtime"
 	"k8s.io/kubernetes/pkg/tools"
-	"k8s.io/kubernetes/pkg/tools/etcdtest"
-
-	"github.com/coreos/go-etcd/etcd"
 )
 
 func newStorage(t *testing.T) (*REST, *tools.FakeEtcdClient) {
-	etcdStorage, fakeClient := registrytest.NewEtcdStorage(t)
+	etcdStorage, fakeClient := registrytest.NewEtcdStorage(t, "experimental")
 	return NewREST(etcdStorage), fakeClient
 }
 
-func validNewThirdPartyResource(name string) *expapi.ThirdPartyResource {
-	return &expapi.ThirdPartyResource{
+func validNewThirdPartyResource(name string) *experimental.ThirdPartyResource {
+	return &experimental.ThirdPartyResource{
 		ObjectMeta: api.ObjectMeta{
 			Name:      name,
 			Namespace: api.NamespaceDefault,
 		},
-		Versions: []expapi.APIVersion{
+		Versions: []experimental.APIVersion{
 			{
 				Name: "stable/v1",
 			},
@@ -61,7 +58,7 @@ func TestCreate(t *testing.T) {
 		// valid
 		rsrc,
 		// invalid
-		&expapi.ThirdPartyResource{},
+		&experimental.ThirdPartyResource{},
 	)
 }
 
@@ -73,7 +70,7 @@ func TestUpdate(t *testing.T) {
 		validNewThirdPartyResource("foo"),
 		// updateFunc
 		func(obj runtime.Object) runtime.Object {
-			object := obj.(*expapi.ThirdPartyResource)
+			object := obj.(*experimental.ThirdPartyResource)
 			object.Description = "new description"
 			return object
 		},
@@ -81,30 +78,9 @@ func TestUpdate(t *testing.T) {
 }
 
 func TestDelete(t *testing.T) {
-	ctx := api.NewDefaultContext()
 	storage, fakeClient := newStorage(t)
-	test := resttest.New(t, storage, fakeClient.SetError)
-	rsrc := validNewThirdPartyResource("foo2")
-	key, _ := storage.KeyFunc(ctx, "foo2")
-	key = etcdtest.AddPrefix(key)
-	createFn := func() runtime.Object {
-		fakeClient.Data[key] = tools.EtcdResponseWithError{
-			R: &etcd.Response{
-				Node: &etcd.Node{
-					Value:         runtime.EncodeOrDie(testapi.Codec(), rsrc),
-					ModifiedIndex: 1,
-				},
-			},
-		}
-		return rsrc
-	}
-	gracefulSetFn := func() bool {
-		if fakeClient.Data[key].R.Node == nil {
-			return false
-		}
-		return fakeClient.Data[key].R.Node.TTL == 30
-	}
-	test.TestDeleteNoGraceful(createFn, gracefulSetFn)
+	test := registrytest.New(t, fakeClient, storage.Etcd)
+	test.TestDelete(validNewThirdPartyResource("foo"))
 }
 
 func TestGet(t *testing.T) {
@@ -117,4 +93,25 @@ func TestList(t *testing.T) {
 	storage, fakeClient := newStorage(t)
 	test := registrytest.New(t, fakeClient, storage.Etcd)
 	test.TestList(validNewThirdPartyResource("foo"))
+}
+
+func TestWatch(t *testing.T) {
+	storage, fakeClient := newStorage(t)
+	test := registrytest.New(t, fakeClient, storage.Etcd)
+	test.TestWatch(
+		validNewThirdPartyResource("foo"),
+		// matching labels
+		[]labels.Set{},
+		// not matching labels
+		[]labels.Set{
+			{"foo": "bar"},
+		},
+		// matching fields
+		[]fields.Set{},
+		// not matching fields
+		[]fields.Set{
+			{"metadata.name": "bar"},
+			{"name": "foo"},
+		},
+	)
 }

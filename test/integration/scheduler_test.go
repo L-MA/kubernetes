@@ -32,9 +32,9 @@ import (
 	"k8s.io/kubernetes/pkg/api/resource"
 	"k8s.io/kubernetes/pkg/api/testapi"
 	"k8s.io/kubernetes/pkg/apiserver"
+	"k8s.io/kubernetes/pkg/client/cache"
+	"k8s.io/kubernetes/pkg/client/record"
 	client "k8s.io/kubernetes/pkg/client/unversioned"
-	"k8s.io/kubernetes/pkg/client/unversioned/cache"
-	"k8s.io/kubernetes/pkg/client/unversioned/record"
 	"k8s.io/kubernetes/pkg/master"
 	"k8s.io/kubernetes/pkg/util"
 	"k8s.io/kubernetes/pkg/util/wait"
@@ -77,7 +77,7 @@ func TestUnschedulableNodes(t *testing.T) {
 		AdmissionControl:      admit.NewAlwaysAdmit(),
 	})
 
-	restClient := client.NewOrDie(&client.Config{Host: s.URL, Version: testapi.Version()})
+	restClient := client.NewOrDie(&client.Config{Host: s.URL, Version: testapi.Default.Version()})
 
 	schedulerConfigFactory := factory.NewConfigFactory(restClient, nil)
 	schedulerConfig, err := schedulerConfigFactory.Create()

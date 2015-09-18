@@ -24,7 +24,7 @@ import (
 	"sync"
 
 	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/client/unversioned/cache"
+	"k8s.io/kubernetes/pkg/client/cache"
 	"k8s.io/kubernetes/pkg/conversion"
 	"k8s.io/kubernetes/pkg/runtime"
 	"k8s.io/kubernetes/pkg/util"
@@ -86,7 +86,7 @@ type Cacher struct {
 	storage Interface
 
 	// "sliding window" of recent changes of objects and the current state.
-	watchCache *cache.WatchCache
+	watchCache *watchCache
 	reflector  *cache.Reflector
 
 	// Registered watchers.
@@ -104,7 +104,7 @@ type Cacher struct {
 // internal cache and updating its cache in the background based on the given
 // configuration.
 func NewCacher(config CacherConfig) *Cacher {
-	watchCache := cache.NewWatchCache(config.CacheCapacity)
+	watchCache := newWatchCache(config.CacheCapacity)
 	listerWatcher := newCacherListerWatcher(config.Storage, config.ResourcePrefix, config.NewListFunc)
 
 	cacher := &Cacher{
@@ -213,13 +213,13 @@ func (c *Cacher) Get(key string, objPtr runtime.Object, ignoreNotFound bool) err
 }
 
 // Implements storage.Interface.
-func (c *Cacher) GetToList(key string, listObj runtime.Object) error {
-	return c.storage.GetToList(key, listObj)
+func (c *Cacher) GetToList(key string, filter FilterFunc, listObj runtime.Object) error {
+	return c.storage.GetToList(key, filter, listObj)
 }
 
 // Implements storage.Interface.
-func (c *Cacher) List(key string, listObj runtime.Object) error {
-	return c.storage.List(key, listObj)
+func (c *Cacher) List(key string, filter FilterFunc, listObj runtime.Object) error {
+	return c.storage.List(key, filter, listObj)
 }
 
 // ListFromMemory implements list operation (the same signature as List method)
@@ -272,7 +272,7 @@ func (c *Cacher) Codec() runtime.Codec {
 	return c.storage.Codec()
 }
 
-func (c *Cacher) processEvent(event cache.WatchCacheEvent) {
+func (c *Cacher) processEvent(event watchCacheEvent) {
 	c.Lock()
 	defer c.Unlock()
 	for _, watcher := range c.watchers {
@@ -303,7 +303,7 @@ func filterFunction(key string, keyFunc func(runtime.Object) (string, error), fi
 	return func(obj runtime.Object) bool {
 		objKey, err := keyFunc(obj)
 		if err != nil {
-			glog.Errorf("Invalid object for filter: %v", obj)
+			glog.Errorf("invalid object for filter: %v", obj)
 			return false
 		}
 		if !strings.HasPrefix(objKey, key) {
@@ -343,7 +343,7 @@ func newCacherListerWatcher(storage Interface, resourcePrefix string, newListFun
 // Implements cache.ListerWatcher interface.
 func (lw *cacherListerWatcher) List() (runtime.Object, error) {
 	list := lw.newListFunc()
-	if err := lw.storage.List(lw.resourcePrefix, list); err != nil {
+	if err := lw.storage.List(lw.resourcePrefix, Everything, list); err != nil {
 		return nil, err
 	}
 	return list, nil
@@ -361,16 +361,16 @@ func (lw *cacherListerWatcher) Watch(resourceVersion string) (watch.Interface, e
 // cacherWatch implements watch.Interface
 type cacheWatcher struct {
 	sync.Mutex
-	input   chan cache.WatchCacheEvent
+	input   chan watchCacheEvent
 	result  chan watch.Event
 	filter  FilterFunc
 	stopped bool
 	forget  func()
 }
 
-func newCacheWatcher(initEvents []cache.WatchCacheEvent, filter FilterFunc, forget func()) *cacheWatcher {
+func newCacheWatcher(initEvents []watchCacheEvent, filter FilterFunc, forget func()) *cacheWatcher {
 	watcher := &cacheWatcher{
-		input:   make(chan cache.WatchCacheEvent, 10),
+		input:   make(chan watchCacheEvent, 10),
 		result:  make(chan watch.Event, 10),
 		filter:  filter,
 		stopped: false,
@@ -400,11 +400,11 @@ func (c *cacheWatcher) stop() {
 	}
 }
 
-func (c *cacheWatcher) add(event cache.WatchCacheEvent) {
+func (c *cacheWatcher) add(event watchCacheEvent) {
 	c.input <- event
 }
 
-func (c *cacheWatcher) sendWatchCacheEvent(event cache.WatchCacheEvent) {
+func (c *cacheWatcher) sendWatchCacheEvent(event watchCacheEvent) {
 	curObjPasses := event.Type != watch.Deleted && c.filter(event.Object)
 	oldObjPasses := false
 	if event.PrevObject != nil {
@@ -430,7 +430,7 @@ func (c *cacheWatcher) sendWatchCacheEvent(event cache.WatchCacheEvent) {
 	}
 }
 
-func (c *cacheWatcher) process(initEvents []cache.WatchCacheEvent) {
+func (c *cacheWatcher) process(initEvents []watchCacheEvent) {
 	for _, event := range initEvents {
 		c.sendWatchCacheEvent(event)
 	}

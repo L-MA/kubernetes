@@ -326,7 +326,7 @@ type PersistentVolumeStatus struct {
 type PersistentVolumeList struct {
 	TypeMeta `json:",inline"`
 	ListMeta `json:"metadata,omitempty"`
-	Items    []PersistentVolume `json:"items,omitempty"`
+	Items    []PersistentVolume `json:"items"`
 }
 
 // PersistentVolumeClaim is a user's request for and claim to a persistent volume
@@ -344,7 +344,7 @@ type PersistentVolumeClaim struct {
 type PersistentVolumeClaimList struct {
 	TypeMeta `json:",inline"`
 	ListMeta `json:"metadata,omitempty"`
-	Items    []PersistentVolumeClaim `json:"items,omitempty"`
+	Items    []PersistentVolumeClaim `json:"items"`
 }
 
 // PersistentVolumeClaimSpec describes the common attributes of storage devices
@@ -835,8 +835,10 @@ const (
 )
 
 type ContainerStateWaiting struct {
-	// Reason could be pulling image,
+	// A brief CamelCase string indicating details about why the container is in waiting state.
 	Reason string `json:"reason,omitempty"`
+	// A human-readable message indicating details about why the container is in waiting state.
+	Message string `json:"message,omitempty"`
 }
 
 type ContainerStateRunning struct {
@@ -978,10 +980,13 @@ type PodSpec struct {
 	// the scheduler simply schedules this pod onto that node, assuming that it fits resource
 	// requirements.
 	NodeName string `json:"nodeName,omitempty"`
-	// Uses the host's network namespace. If this option is set, the ports that will be
+	// Use the host's network namespace. If this option is set, the ports that will be
 	// used must be specified.
 	// Optional: Default to false.
 	HostNetwork bool `json:"hostNetwork,omitempty"`
+	// Use the host's pid namespace.
+	// Optional: Default to false.
+	HostPID bool `json:"hostPID,omitempty"`
 	// ImagePullSecrets is an optional list of references to secrets in the same namespace to use for pulling any of the images used by this PodSpec.
 	// If specified, these secrets will be passed to individual puller implementations for them to use.  For example,
 	// in the case of docker, only DockerConfig type secrets are honored.
@@ -1155,6 +1160,10 @@ const (
 	// external load balancer (if the cloud provider supports it), in addition
 	// to 'NodePort' type.
 	ServiceTypeLoadBalancer ServiceType = "LoadBalancer"
+
+	// ServiceTypeNamespaceIP means a service will only be accessible inside the
+	// namespace, via the Cluster IP.
+	ServiceTypeNamespaceIP ServiceType = "experimentalNamespaceIP"
 )
 
 // ServiceStatus represents the current status of a service
@@ -1185,6 +1194,9 @@ type LoadBalancerIngress struct {
 
 // ServiceSpec describes the attributes that a user creates on a service
 type ServiceSpec struct {
+	// Type determines how the service will be exposed.  Valid options: ClusterIP, NodePort, LoadBalancer, experimentalNamespaceIP
+	Type ServiceType `json:"type,omitempty"`
+
 	// Required: The list of ports that are exposed by this service.
 	Ports []ServicePort `json:"ports"`
 
@@ -1200,12 +1212,16 @@ type ServiceSpec struct {
 	// None can be specified for headless services when proxying is not required
 	ClusterIP string `json:"clusterIP,omitempty"`
 
-	// Type determines how the service will be exposed.  Valid options: ClusterIP, NodePort, LoadBalancer
-	Type ServiceType `json:"type,omitempty"`
-
 	// ExternalIPs are used by external load balancers, or can be set by
 	// users to handle external traffic that arrives at a node.
 	ExternalIPs []string `json:"externalIPs,omitempty"`
+
+	// Only applies to Service Type: LoadBalancer
+	// LoadBalancer will get created with the IP specified in this field.
+	// This feature depends on whether the underlying cloud-provider supports specifying
+	// the loadBalancerIP when a load balancer is created.
+	// This field will be ignored if the cloud-provider does not support the feature.
+	LoadBalancerIP string `json:"loadBalancerIP,omitempty"`
 
 	// Required: Supports "ClientIP" and "None".  Used to maintain session affinity.
 	SessionAffinity ServiceAffinity `json:"sessionAffinity,omitempty"`
@@ -1305,8 +1321,9 @@ type Endpoints struct {
 //     a: [ 10.10.1.1:8675, 10.10.2.2:8675 ],
 //     b: [ 10.10.1.1:309, 10.10.2.2:309 ]
 type EndpointSubset struct {
-	Addresses []EndpointAddress
-	Ports     []EndpointPort
+	Addresses         []EndpointAddress
+	NotReadyAddresses []EndpointAddress
+	Ports             []EndpointPort
 }
 
 // EndpointAddress is a tuple that describes single IP address.
@@ -1357,23 +1374,35 @@ type NodeSpec struct {
 	Unschedulable bool `json:"unschedulable,omitempty"`
 }
 
+// DaemonEndpoint contains information about a single Daemon endpoint.
+type DaemonEndpoint struct {
+	// Port number of the given endpoint.
+	Port int `json:port`
+}
+
+// NodeDaemonEndpoints lists ports opened by daemons running on the Node.
+type NodeDaemonEndpoints struct {
+	// Endpoint on which Kubelet is listening.
+	KubeletEndpoint DaemonEndpoint `json:"kubeletEndpoint,omitempty"`
+}
+
 // NodeSystemInfo is a set of ids/uuids to uniquely identify the node.
 type NodeSystemInfo struct {
-	// MachineID is the machine-id reported by the node
+	// Machine ID reported by the node.
 	MachineID string `json:"machineID"`
-	// SystemUUID is the system-uuid reported by the node
+	// System UUID reported by the node.
 	SystemUUID string `json:"systemUUID"`
-	// BootID is the boot-id reported by the node
+	// Boot ID reported by the node.
 	BootID string `json:"bootID"`
-	// Kernel version reported by the node
+	// Kernel Version reported by the node.
 	KernelVersion string `json:"kernelVersion"`
-	// OS image used reported by the node
+	// OS Image reported by the node.
 	OsImage string `json:"osImage"`
-	// Container runtime version reported by the node
+	// ContainerRuntime Version reported by the node.
 	ContainerRuntimeVersion string `json:"containerRuntimeVersion"`
-	// Kubelet version reported by the node
+	// Kubelet Version reported by the node.
 	KubeletVersion string `json:"kubeletVersion"`
-	// Kube-proxy version reported by the node
+	// KubeProxy Version reported by the node.
 	KubeProxyVersion string `json:"kubeProxyVersion"`
 }
 
@@ -1387,7 +1416,9 @@ type NodeStatus struct {
 	Conditions []NodeCondition `json:"conditions,omitempty"`
 	// Queried from cloud provider, if available.
 	Addresses []NodeAddress `json:"addresses,omitempty"`
-	// NodeSystemInfo is a set of ids/uuids to uniquely identify the node
+	// Endpoints of daemons running on the Node.
+	DaemonEndpoints NodeDaemonEndpoints `json:"daemonEndpoints,omitempty"`
+	// Set of ids/uuids to uniquely identify the node.
 	NodeInfo NodeSystemInfo `json:"nodeInfo,omitempty"`
 }
 
@@ -1439,7 +1470,7 @@ type NodeAddress struct {
 }
 
 // NodeResources is an object for conveying resource information about a node.
-// see http://docs.k8s.io/design/resources.md for more details.
+// see http://releases.k8s.io/HEAD/docs/design/resources.md for more details.
 type NodeResources struct {
 	// Capacity represents the available resources of a node
 	Capacity ResourceList `json:"capacity,omitempty"`
@@ -1482,10 +1513,26 @@ type NodeList struct {
 	Items []Node `json:"items"`
 }
 
-// NamespaceSpec describes the attributes on a Namespace
+// NamespaceNetworkPolicy determines who is authorized to access pods in the namespace
+type NamespaceNetworkPolicy string
+
+// These are the valid network policies of a namespace
+const (
+	// Closed namespaces are only accessible by pods within the namespace
+	NamespaceNetworkPolicyClosed NamespaceNetworkPolicy = "Closed"
+	// Open namespaces are accessible from any namespace
+	NamespaceNetworkPolicyOpen NamespaceNetworkPolicy = "Open"
+)
+
+// NamespaceSpec describes the attributes on a Namespace.
 type NamespaceSpec struct {
-	// Finalizers is an opaque list of values that must be empty to permanently remove object from storage
-	Finalizers []FinalizerName
+	// Finalizers is an opaque list of values that must be empty to permanently remove object from storage.
+	// More info: http://releases.k8s.io/HEAD/docs/design/namespaces.md#finalizers
+	Finalizers []FinalizerName `json:"finalizers,omitempty"`
+
+	// NetworkPolicy indicates who is authorized to access pods in the namespace.
+	// Must be either Open or Closed. Defaults to Open.
+	NetworkPolicy NamespaceNetworkPolicy `json:"experimentalNetworkPolicy,omitempty"`
 }
 
 type FinalizerName string

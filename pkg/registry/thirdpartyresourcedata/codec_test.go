@@ -20,9 +20,11 @@ import (
 	"encoding/json"
 	"reflect"
 	"testing"
+	"time"
 
 	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/expapi"
+	"k8s.io/kubernetes/pkg/apis/experimental"
+	"k8s.io/kubernetes/pkg/util"
 )
 
 type Foo struct {
@@ -35,7 +37,7 @@ type Foo struct {
 
 type FooList struct {
 	api.TypeMeta `json:",inline"`
-	api.ListMeta `json:"metadata,omitempty" description:"standard list metadata; see http://docs.k8s.io/api-conventions.md#metadata"`
+	api.ListMeta `json:"metadata,omitempty" description:"standard list metadata; see http://releases.k8s.io/HEAD/docs/devel/api-conventions.md#metadata"`
 
 	items []Foo `json:"items"`
 }
@@ -58,6 +60,16 @@ func TestCodec(t *testing.T) {
 		{
 			obj:  &Foo{ObjectMeta: api.ObjectMeta{Name: "bar", ResourceVersion: "baz"}, TypeMeta: api.TypeMeta{Kind: "Foo"}},
 			name: "resource version",
+		},
+		{
+			obj: &Foo{
+				ObjectMeta: api.ObjectMeta{
+					Name:              "bar",
+					CreationTimestamp: util.Time{time.Unix(100, 0)},
+				},
+				TypeMeta: api.TypeMeta{Kind: "Foo"},
+			},
+			name: "creation time",
 		},
 		{
 			obj: &Foo{
@@ -89,7 +101,7 @@ func TestCodec(t *testing.T) {
 			}
 			continue
 		}
-		rsrcObj, ok := obj.(*expapi.ThirdPartyResourceData)
+		rsrcObj, ok := obj.(*experimental.ThirdPartyResourceData)
 		if !ok {
 			t.Errorf("[%s] unexpected object: %v", test.name, obj)
 			continue

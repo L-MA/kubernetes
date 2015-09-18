@@ -27,7 +27,7 @@ import (
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/registered"
 	"k8s.io/kubernetes/pkg/api/resource"
-	"k8s.io/kubernetes/pkg/expapi"
+	"k8s.io/kubernetes/pkg/apis/experimental"
 	"k8s.io/kubernetes/pkg/fields"
 	"k8s.io/kubernetes/pkg/labels"
 	"k8s.io/kubernetes/pkg/runtime"
@@ -121,15 +121,15 @@ func FuzzerFor(t *testing.T, version string, src rand.Source) *fuzz.Fuzzer {
 			c.FuzzNoCustom(j) // fuzz self without calling this function again
 			//j.TemplateRef = nil // this is required for round trip
 		},
-		func(j *expapi.DeploymentStrategy, c fuzz.Continue) {
+		func(j *experimental.DeploymentStrategy, c fuzz.Continue) {
 			c.FuzzNoCustom(j) // fuzz self without calling this function again
 			// Ensure that strategyType is one of valid values.
-			strategyTypes := []expapi.DeploymentType{expapi.DeploymentRecreate, expapi.DeploymentRollingUpdate}
+			strategyTypes := []experimental.DeploymentStrategyType{experimental.RecreateDeploymentStrategyType, experimental.RollingUpdateDeploymentStrategyType}
 			j.Type = strategyTypes[c.Rand.Intn(len(strategyTypes))]
-			if j.Type != expapi.DeploymentRollingUpdate {
+			if j.Type != experimental.RollingUpdateDeploymentStrategyType {
 				j.RollingUpdate = nil
 			} else {
-				rollingUpdate := expapi.RollingUpdateDeployment{}
+				rollingUpdate := experimental.RollingUpdateDeployment{}
 				if c.RandBool() {
 					rollingUpdate.MaxUnavailable = util.NewIntOrStringFromInt(int(c.RandUint64()))
 					rollingUpdate.MaxSurge = util.NewIntOrStringFromInt(int(c.RandUint64()))
@@ -262,7 +262,7 @@ func FuzzerFor(t *testing.T, version string, src rand.Source) *fuzz.Fuzzer {
 			*p = types[c.Rand.Intn(len(types))]
 		},
 		func(p *api.ServiceType, c fuzz.Continue) {
-			types := []api.ServiceType{api.ServiceTypeClusterIP, api.ServiceTypeNodePort, api.ServiceTypeLoadBalancer}
+			types := []api.ServiceType{api.ServiceTypeClusterIP, api.ServiceTypeNodePort, api.ServiceTypeLoadBalancer, api.ServiceTypeNamespaceIP}
 			*p = types[c.Rand.Intn(len(types))]
 		},
 		func(ct *api.Container, c fuzz.Continue) {
@@ -322,6 +322,8 @@ func FuzzerFor(t *testing.T, version string, src rand.Source) *fuzz.Fuzzer {
 		},
 		func(s *api.NamespaceSpec, c fuzz.Continue) {
 			s.Finalizers = []api.FinalizerName{api.FinalizerKubernetes}
+			networkPolicies := []api.NamespaceNetworkPolicy{api.NamespaceNetworkPolicyClosed, api.NamespaceNetworkPolicyOpen}
+			s.NetworkPolicy = networkPolicies[c.Rand.Intn(len(networkPolicies))]
 		},
 		func(s *api.NamespaceStatus, c fuzz.Continue) {
 			s.Phase = api.NamespaceActive
@@ -351,7 +353,7 @@ func FuzzerFor(t *testing.T, version string, src rand.Source) *fuzz.Fuzzer {
 			c.FuzzNoCustom(n)
 			n.Spec.ExternalID = "external"
 		},
-		func(s *expapi.APIVersion, c fuzz.Continue) {
+		func(s *experimental.APIVersion, c fuzz.Continue) {
 			// We can't use c.RandString() here because it may generate empty
 			// string, which will cause tests failure.
 			s.APIGroup = "something"

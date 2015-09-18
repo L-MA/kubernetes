@@ -23,9 +23,9 @@ import (
 	"strings"
 
 	"k8s.io/kubernetes/pkg/api"
+	"k8s.io/kubernetes/pkg/api/latest"
 	"k8s.io/kubernetes/pkg/api/meta"
-	"k8s.io/kubernetes/pkg/expapi"
-	"k8s.io/kubernetes/pkg/expapi/latest"
+	"k8s.io/kubernetes/pkg/apis/experimental"
 	"k8s.io/kubernetes/pkg/runtime"
 )
 
@@ -49,7 +49,7 @@ func (t *thirdPartyResourceDataMapper) RESTMapping(kind string, versions ...stri
 	if kind != "ThirdPartyResourceData" {
 		return nil, fmt.Errorf("unknown kind %s expected %s", kind, t.kind)
 	}
-	mapping, err := t.mapper.RESTMapping("ThirdPartyResourceData", latest.Version)
+	mapping, err := t.mapper.RESTMapping("ThirdPartyResourceData", latest.GroupOrDie("experimental").Version)
 	if err != nil {
 		return nil, err
 	}
@@ -86,7 +86,7 @@ func NewCodec(codec runtime.Codec, kind string) runtime.Codec {
 	return &thirdPartyResourceDataCodec{codec, kind}
 }
 
-func (t *thirdPartyResourceDataCodec) populate(objIn *expapi.ThirdPartyResourceData, data []byte) error {
+func (t *thirdPartyResourceDataCodec) populate(objIn *experimental.ThirdPartyResourceData, data []byte) error {
 	var obj interface{}
 	if err := json.Unmarshal(data, &obj); err != nil {
 		fmt.Printf("Invalid JSON:\n%s\n", string(data))
@@ -99,13 +99,13 @@ func (t *thirdPartyResourceDataCodec) populate(objIn *expapi.ThirdPartyResourceD
 	return t.populateFromObject(objIn, mapObj, data)
 }
 
-func (t *thirdPartyResourceDataCodec) populateFromObject(objIn *expapi.ThirdPartyResourceData, mapObj map[string]interface{}, data []byte) error {
-	kind, ok := mapObj["kind"].(string)
-	if !ok {
-		return fmt.Errorf("unexpected object for kind: %#v", mapObj["kind"])
+func (t *thirdPartyResourceDataCodec) populateFromObject(objIn *experimental.ThirdPartyResourceData, mapObj map[string]interface{}, data []byte) error {
+	typeMeta := api.TypeMeta{}
+	if err := json.Unmarshal(data, &typeMeta); err != nil {
+		return err
 	}
-	if kind != t.kind {
-		return fmt.Errorf("unexpected kind: %s, expected: %s", kind, t.kind)
+	if typeMeta.Kind != t.kind {
+		return fmt.Errorf("unexpected kind: %s, expected %s", typeMeta.Kind, t.kind)
 	}
 
 	metadata, ok := mapObj["metadata"].(map[string]interface{})
@@ -113,44 +113,21 @@ func (t *thirdPartyResourceDataCodec) populateFromObject(objIn *expapi.ThirdPart
 		return fmt.Errorf("unexpected object for metadata: %#v", mapObj["metadata"])
 	}
 
-	if resourceVersion, ok := metadata["resourceVersion"]; ok {
-		resourceVersionStr, ok := resourceVersion.(string)
-		if !ok {
-			return fmt.Errorf("unexpected object for resourceVersion: %v", resourceVersion)
-		}
-
-		objIn.ResourceVersion = resourceVersionStr
+	metadataData, err := json.Marshal(metadata)
+	if err != nil {
+		return err
 	}
 
-	name, ok := metadata["name"].(string)
-	if !ok {
-		return fmt.Errorf("unexpected object for name: %#v", metadata)
+	if err := json.Unmarshal(metadataData, &objIn.ObjectMeta); err != nil {
+		return err
 	}
 
-	if labels, ok := metadata["labels"]; ok {
-		labelMap, ok := labels.(map[string]interface{})
-		if !ok {
-			return fmt.Errorf("unexpected object for labels: %v", labelMap)
-		}
-		for key, value := range labelMap {
-			valueStr, ok := value.(string)
-			if !ok {
-				return fmt.Errorf("unexpected label: %v", value)
-			}
-			if objIn.Labels == nil {
-				objIn.Labels = map[string]string{}
-			}
-			objIn.Labels[key] = valueStr
-		}
-	}
-
-	objIn.Name = name
 	objIn.Data = data
 	return nil
 }
 
 func (t *thirdPartyResourceDataCodec) Decode(data []byte) (runtime.Object, error) {
-	result := &expapi.ThirdPartyResourceData{}
+	result := &experimental.ThirdPartyResourceData{}
 	if err := t.populate(result, data); err != nil {
 		return nil, err
 	}
@@ -171,7 +148,7 @@ func (t *thirdPartyResourceDataCodec) DecodeToVersion(data []byte, version strin
 }
 
 func (t *thirdPartyResourceDataCodec) DecodeInto(data []byte, obj runtime.Object) error {
-	thirdParty, ok := obj.(*expapi.ThirdPartyResourceData)
+	thirdParty, ok := obj.(*experimental.ThirdPartyResourceData)
 	if !ok {
 		return fmt.Errorf("unexpected object: %#v", obj)
 	}
@@ -179,7 +156,7 @@ func (t *thirdPartyResourceDataCodec) DecodeInto(data []byte, obj runtime.Object
 }
 
 func (t *thirdPartyResourceDataCodec) DecodeIntoWithSpecifiedVersionKind(data []byte, obj runtime.Object, version, kind string) error {
-	thirdParty, ok := obj.(*expapi.ThirdPartyResourceData)
+	thirdParty, ok := obj.(*experimental.ThirdPartyResourceData)
 	if !ok {
 		return fmt.Errorf("unexpected object: %#v", obj)
 	}
@@ -230,16 +207,33 @@ const template = `{
   "items": [ %s ]
 }`
 
+func encodeToJSON(obj *experimental.ThirdPartyResourceData) ([]byte, error) {
+	var objOut interface{}
+	if err := json.Unmarshal(obj.Data, &objOut); err != nil {
+		return nil, err
+	}
+	objMap, ok := objOut.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("unexpected type: %v", objOut)
+	}
+	objMap["metadata"] = obj.ObjectMeta
+	return json.Marshal(objMap)
+}
+
 func (t *thirdPartyResourceDataCodec) Encode(obj runtime.Object) (data []byte, err error) {
 	switch obj := obj.(type) {
-	case *expapi.ThirdPartyResourceData:
-		return obj.Data, nil
-	case *expapi.ThirdPartyResourceDataList:
+	case *experimental.ThirdPartyResourceData:
+		return encodeToJSON(obj)
+	case *experimental.ThirdPartyResourceDataList:
 		// TODO: There must be a better way to do this...
 		buff := &bytes.Buffer{}
 		dataStrings := make([]string, len(obj.Items))
 		for ix := range obj.Items {
-			dataStrings[ix] = string(obj.Items[ix].Data)
+			data, err := encodeToJSON(&obj.Items[ix])
+			if err != nil {
+				return nil, err
+			}
+			dataStrings[ix] = string(data)
 		}
 		fmt.Fprintf(buff, template, t.kind+"List", strings.Join(dataStrings, ","))
 		return buff.Bytes(), nil
@@ -265,10 +259,10 @@ func (t *thirdPartyResourceDataCreator) New(version, kind string) (out runtime.O
 	}
 	switch kind {
 	case "ThirdPartyResourceData":
-		return &expapi.ThirdPartyResourceData{}, nil
+		return &experimental.ThirdPartyResourceData{}, nil
 	case "ThirdPartyResourceDataList":
-		return &expapi.ThirdPartyResourceDataList{}, nil
+		return &experimental.ThirdPartyResourceDataList{}, nil
 	default:
-		return t.delegate.New(latest.Version, kind)
+		return t.delegate.New(latest.GroupOrDie("experimental").Version, kind)
 	}
 }

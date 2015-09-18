@@ -110,27 +110,6 @@ func waitForGroupSize(size int) error {
 	return fmt.Errorf("timeout waiting %v for node instance group size to be %d", timeout, size)
 }
 
-func waitForClusterSize(c *client.Client, size int, timeout time.Duration) error {
-	for start := time.Now(); time.Since(start) < timeout; time.Sleep(20 * time.Second) {
-		nodes, err := c.Nodes().List(labels.Everything(), fields.Everything())
-		if err != nil {
-			Logf("Failed to list nodes: %v", err)
-			continue
-		}
-		// Filter out not-ready nodes.
-		filterNodes(nodes, func(node api.Node) bool {
-			return isNodeReadySetAsExpected(&node, true)
-		})
-
-		if len(nodes.Items) == size {
-			Logf("Cluster has reached the desired size %d", size)
-			return nil
-		}
-		Logf("Waiting for cluster size %d, current size %d", size, len(nodes.Items))
-	}
-	return fmt.Errorf("timeout waiting %v for cluster size to be %d", timeout, size)
-}
-
 func svcByName(name string) *api.Service {
 	return &api.Service{
 		ObjectMeta: api.ObjectMeta{
@@ -206,7 +185,7 @@ func rcByNameContainer(name string, replicas int, image string, labels map[strin
 	return &api.ReplicationController{
 		TypeMeta: api.TypeMeta{
 			Kind:       "ReplicationController",
-			APIVersion: latest.Version,
+			APIVersion: latest.GroupOrDie("").Version,
 		},
 		ObjectMeta: api.ObjectMeta{
 			Name: name,
@@ -543,9 +522,12 @@ var _ = Describe("Nodes", func() {
 				By(fmt.Sprintf("block network traffic from node %s", node.Name))
 				performTemporaryNetworkFailure(c, ns, name, replicas, pods.Items[0].Name, node)
 				Logf("Waiting %v for node %s to be ready once temporary network failure ends", resizeNodeReadyTimeout, node.Name)
-				if !waitForNodeToBe(c, node.Name, true, resizeNodeReadyTimeout) {
+				if !waitForNodeToBeReady(c, node.Name, resizeNodeReadyTimeout) {
 					Failf("Node %s did not become ready within %v", node.Name, resizeNodeReadyTimeout)
 				}
+
+				// sleep a bit, to allow Watch in NodeController to catch up.
+				time.Sleep(5 * time.Second)
 
 				By("verify whether new pods can be created on the re-attached node")
 				// increasing the RC size is not a valid way to test this

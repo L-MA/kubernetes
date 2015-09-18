@@ -24,24 +24,27 @@ import (
 	"github.com/golang/glog"
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/validation"
-	"k8s.io/kubernetes/pkg/client/unversioned/record"
+	"k8s.io/kubernetes/pkg/client/record"
 	"k8s.io/kubernetes/pkg/kubelet"
 	kubecontainer "k8s.io/kubernetes/pkg/kubelet/container"
 	kubeletTypes "k8s.io/kubernetes/pkg/kubelet/types"
 	kubeletUtil "k8s.io/kubernetes/pkg/kubelet/util"
-	"k8s.io/kubernetes/pkg/util"
 	"k8s.io/kubernetes/pkg/util/config"
 	utilerrors "k8s.io/kubernetes/pkg/util/errors"
 	"k8s.io/kubernetes/pkg/util/fielderrors"
+	"k8s.io/kubernetes/pkg/util/sets"
 )
 
 // PodConfigNotificationMode describes how changes are sent to the update channel.
 type PodConfigNotificationMode int
 
 const (
+	// PodConfigNotificationUnknown is the default value for
+	// PodConfigNotificationMode when uninitialized.
+	PodConfigNotificationUnknown = iota
 	// PodConfigNotificationSnapshot delivers the full configuration as a SET whenever
 	// any change occurs.
-	PodConfigNotificationSnapshot = iota
+	PodConfigNotificationSnapshot
 	// PodConfigNotificationSnapshotAndUpdates delivers an UPDATE message whenever pods are
 	// changed, and a SET message if there are any additions or removals.
 	PodConfigNotificationSnapshotAndUpdates
@@ -61,7 +64,7 @@ type PodConfig struct {
 
 	// contains the list of all configured sources
 	sourcesLock sync.Mutex
-	sources     util.StringSet
+	sources     sets.String
 }
 
 // NewPodConfig creates an object that can merge many configuration sources into a stream
@@ -73,7 +76,7 @@ func NewPodConfig(mode PodConfigNotificationMode, recorder record.EventRecorder)
 		pods:    storage,
 		mux:     config.NewMux(storage),
 		updates: updates,
-		sources: util.StringSet{},
+		sources: sets.String{},
 	}
 	return podConfig
 }
@@ -124,7 +127,7 @@ type podStorage struct {
 
 	// contains the set of all sources that have sent at least one SET
 	sourcesSeenLock sync.Mutex
-	sourcesSeen     util.StringSet
+	sourcesSeen     sets.String
 
 	// the EventRecorder to use
 	recorder record.EventRecorder
@@ -138,7 +141,7 @@ func newPodStorage(updates chan<- kubelet.PodUpdate, mode PodConfigNotificationM
 		pods:        make(map[string]map[string]*api.Pod),
 		mode:        mode,
 		updates:     updates,
-		sourcesSeen: util.StringSet{},
+		sourcesSeen: sets.String{},
 		recorder:    recorder,
 	}
 }
@@ -178,6 +181,8 @@ func (s *podStorage) Merge(source string, change interface{}) error {
 			s.updates <- kubelet.PodUpdate{Pods: s.MergedState().([]*api.Pod), Op: kubelet.SET, Source: source}
 		}
 
+	case PodConfigNotificationUnknown:
+		fallthrough
 	default:
 		panic(fmt.Sprintf("unsupported PodConfigNotificationMode: %#v", s.mode))
 	}
@@ -306,7 +311,7 @@ func (s *podStorage) seenSources(sources ...string) bool {
 }
 
 func filterInvalidPods(pods []*api.Pod, source string, recorder record.EventRecorder) (filtered []*api.Pod) {
-	names := util.StringSet{}
+	names := sets.String{}
 	for i, pod := range pods {
 		var errlist []error
 		if errs := validation.ValidatePod(pod); len(errs) != 0 {
@@ -333,6 +338,61 @@ func filterInvalidPods(pods []*api.Pod, source string, recorder record.EventReco
 	return
 }
 
+// Annotations that the kubelet adds to the pod.
+var localAnnotations = []string{
+	kubelet.ConfigSourceAnnotationKey,
+	kubelet.ConfigMirrorAnnotationKey,
+	kubelet.ConfigFirstSeenAnnotationKey,
+}
+
+func isLocalAnnotationKey(key string) bool {
+	for _, localKey := range localAnnotations {
+		if key == localKey {
+			return true
+		}
+	}
+	return false
+}
+
+// isAnnotationMapEqual returns true if the existing annotation Map is equal to candidate except
+// for local annotations.
+func isAnnotationMapEqual(existingMap, candidateMap map[string]string) bool {
+	if candidateMap == nil {
+		return true
+	}
+	for k, v := range candidateMap {
+		if existingValue, ok := existingMap[k]; ok && existingValue == v {
+			continue
+		}
+		return false
+	}
+	for k := range existingMap {
+		if isLocalAnnotationKey(k) {
+			continue
+		}
+		// stale entry in existing map.
+		if _, exists := candidateMap[k]; !exists {
+			return false
+		}
+	}
+	return true
+}
+
+// updateAnnotations returns an Annotation map containing the api annotation map plus
+// locally managed annotations
+func updateAnnotations(existing, ref *api.Pod) {
+	annotations := make(map[string]string, len(ref.Annotations)+len(localAnnotations))
+	for k, v := range ref.Annotations {
+		annotations[k] = v
+	}
+	for _, k := range localAnnotations {
+		if v, ok := existing.Annotations[k]; ok {
+			annotations[k] = v
+		}
+	}
+	existing.Annotations = annotations
+}
+
 // checkAndUpdatePod updates existing if ref makes a meaningful change and returns true, or
 // returns false if there was no update.
 func checkAndUpdatePod(existing, ref *api.Pod) bool {
@@ -340,13 +400,15 @@ func checkAndUpdatePod(existing, ref *api.Pod) bool {
 	//       like the source annotation or the UID (to ensure safety)
 	if reflect.DeepEqual(existing.Spec, ref.Spec) &&
 		reflect.DeepEqual(existing.DeletionTimestamp, ref.DeletionTimestamp) &&
-		reflect.DeepEqual(existing.DeletionGracePeriodSeconds, ref.DeletionGracePeriodSeconds) {
+		reflect.DeepEqual(existing.DeletionGracePeriodSeconds, ref.DeletionGracePeriodSeconds) &&
+		isAnnotationMapEqual(existing.Annotations, ref.Annotations) {
 		return false
 	}
 	// this is an update
 	existing.Spec = ref.Spec
 	existing.DeletionTimestamp = ref.DeletionTimestamp
 	existing.DeletionGracePeriodSeconds = ref.DeletionGracePeriodSeconds
+	updateAnnotations(existing, ref)
 	return true
 }
 

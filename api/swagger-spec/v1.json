@@ -11213,7 +11213,7 @@
       "items": {
        "$ref": "v1.EndpointSubset"
       },
-      "description": "The set of all endpoints is the union of all subsets. Sets of addresses and ports that comprise a service."
+      "description": "The set of all endpoints is the union of all subsets. Addresses are placed into subsets according to the IPs they share. A single address with multiple ports, some of which are ready and some of which are not (because they come from different containers) will result in the address being displayed in different subsets for the different ports. No address will appear in both Addresses and NotReadyAddresses in the same subset. Sets of addresses and ports that comprise a service."
      }
     }
    },
@@ -11226,7 +11226,14 @@
       "items": {
        "$ref": "v1.EndpointAddress"
       },
-      "description": "IP addresses which offer the related ports."
+      "description": "IP addresses which offer the related ports that are marked as ready. These endpoints should be considered safe for load balancers and clients to utilize."
+     },
+     "notReadyAddresses": {
+      "type": "array",
+      "items": {
+       "$ref": "v1.EndpointAddress"
+      },
+      "description": "IP addresses which offer the related ports but are not currently marked as ready because they have not yet finished starting, have recently failed a readiness check, or have recently failed a liveness check."
      },
      "ports": {
       "type": "array",
@@ -11651,6 +11658,10 @@
        "$ref": "v1.FinalizerName"
       },
       "description": "Finalizers is an opaque list of values that must be empty to permanently remove object from storage. More info: http://releases.k8s.io/HEAD/docs/design/namespaces.md#finalizers"
+     },
+     "experimentalNetworkPolicy": {
+      "type": "string",
+      "description": "NetworkPolicy indicates who is authorized to access pods in the namespace. Must be either Open or Closed. Defaults to Open."
      }
     }
    },
@@ -11770,9 +11781,13 @@
       },
       "description": "List of addresses reachable to the node. Queried from cloud provider, if available. More info: http://releases.k8s.io/HEAD/docs/admin/node.md#node-addresses"
      },
+     "daemonEndpoints": {
+      "$ref": "v1.NodeDaemonEndpoints",
+      "description": "Endpoints of daemons running on the Node."
+     },
      "nodeInfo": {
       "$ref": "v1.NodeSystemInfo",
-      "description": "NodeSystemInfo is a set of ids/uuids to uniquely identify the node. More info: http://releases.k8s.io/HEAD/docs/admin/node.md#node-info"
+      "description": "Set of ids/uuids to uniquely identify the node. More info: http://releases.k8s.io/HEAD/docs/admin/node.md#node-info"
      }
     }
    },
@@ -11828,6 +11843,30 @@
      }
     }
    },
+   "v1.NodeDaemonEndpoints": {
+    "id": "v1.NodeDaemonEndpoints",
+    "description": "NodeDaemonEndpoints lists ports opened by daemons running on the Node.",
+    "properties": {
+     "kubeletEndpoint": {
+      "$ref": "v1.DaemonEndpoint",
+      "description": "Endpoint on which Kubelet is listening."
+     }
+    }
+   },
+   "v1.DaemonEndpoint": {
+    "id": "v1.DaemonEndpoint",
+    "description": "DaemonEndpoint contains information about a single Daemon endpoint.",
+    "required": [
+     "Port"
+    ],
+    "properties": {
+     "Port": {
+      "type": "integer",
+      "format": "int32",
+      "description": "Port number of the given endpoint."
+     }
+    }
+   },
    "v1.NodeSystemInfo": {
     "id": "v1.NodeSystemInfo",
     "description": "NodeSystemInfo is a set of ids/uuids to uniquely identify the node.",
@@ -11844,41 +11883,44 @@
     "properties": {
      "machineID": {
       "type": "string",
-      "description": "MachineID is the machine-id reported by the node."
+      "description": "Machine ID reported by the node."
      },
      "systemUUID": {
       "type": "string",
-      "description": "SystemUUID is the system-uuid reported by the node."
+      "description": "System UUID reported by the node."
      },
      "bootID": {
       "type": "string",
-      "description": "BootID is the boot-id reported by the node."
+      "description": "Boot ID reported by the node."
      },
      "kernelVersion": {
       "type": "string",
-      "description": "Kernel version reported by the node from 'uname -r' (e.g. 3.16.0-0.bpo.4-amd64)"
+      "description": "Kernel Version reported by the node from 'uname -r' (e.g. 3.16.0-0.bpo.4-amd64)."
      },
      "osImage": {
       "type": "string",
-      "description": "OS image used reported by the node from /etc/os-release (e.g. Debian GNU/Linux 7 (wheezy))"
+      "description": "OS Image reported by the node from /etc/os-release (e.g. Debian GNU/Linux 7 (wheezy))."
      },
      "containerRuntimeVersion": {
       "type": "string",
-      "description": "Container runtime version reported by the node through runtime remote API (e.g. docker://1.5.0)"
+      "description": "ContainerRuntime Version reported by the node through runtime remote API (e.g. docker://1.5.0)."
      },
      "kubeletVersion": {
       "type": "string",
-      "description": "Kubelet version reported by the node."
+      "description": "Kubelet Version reported by the node."
      },
      "kubeProxyVersion": {
       "type": "string",
-      "description": "Kube-proxy version reported by the node."
+      "description": "KubeProxy Version reported by the node."
      }
     }
    },
    "v1.PersistentVolumeClaimList": {
     "id": "v1.PersistentVolumeClaimList",
     "description": "PersistentVolumeClaimList is a list of PersistentVolumeClaim items.",
+    "required": [
+     "items"
+    ],
     "properties": {
      "kind": {
       "type": "string",
@@ -11990,6 +12032,9 @@
    "v1.PersistentVolumeList": {
     "id": "v1.PersistentVolumeList",
     "description": "PersistentVolumeList is a list of PersistentVolume items.",
+    "required": [
+     "items"
+    ],
     "properties": {
      "kind": {
       "type": "string",
@@ -12484,7 +12529,11 @@
      },
      "hostNetwork": {
       "type": "boolean",
-      "description": "Host networking requested for this pod. Uses the host's network namespace. If this option is set, the ports that will be used must be specified. Default to false."
+      "description": "Host networking requested for this pod. Use the host's network namespace. If this option is set, the ports that will be used must be specified. Default to false."
+     },
+     "hostPID": {
+      "type": "boolean",
+      "description": "Use the host's pid namespace. Optional: Default to false."
      },
      "imagePullSecrets": {
       "type": "array",
@@ -13165,7 +13214,11 @@
     "properties": {
      "reason": {
       "type": "string",
-      "description": "(brief) reason the container is not yet running, such as pulling its image."
+      "description": "(brief) reason the container is not yet running."
+     },
+     "message": {
+      "type": "string",
+      "description": "Message regarding why the container is not yet running."
      }
     }
    },
@@ -13644,7 +13697,7 @@
      },
      "type": {
       "type": "string",
-      "description": "Type of exposed service. Must be ClusterIP, NodePort, or LoadBalancer. Defaults to ClusterIP. More info: http://releases.k8s.io/HEAD/docs/user-guide/services.md#external-services"
+      "description": "Type of exposed service. Must be ClusterIP, NodePort, LoadBalancer, or experimentalNamespaceIP. Defaults to ClusterIP. More info: http://releases.k8s.io/HEAD/docs/user-guide/services.md#external-services"
      },
      "externalIPs": {
       "type": "array",
@@ -13656,6 +13709,10 @@
      "sessionAffinity": {
       "type": "string",
       "description": "Supports \"ClientIP\" and \"None\". Used to maintain session affinity. Enable client IP based session affinity. Must be ClientIP or None. Defaults to None. More info: http://releases.k8s.io/HEAD/docs/user-guide/services.md#virtual-ips-and-service-proxies"
+     },
+     "loadBalancerIP": {
+      "type": "string",
+      "description": "Only applies to Service Type: LoadBalancer LoadBalancer will get created with the IP specified in this field. This feature depends on whether the underlying cloud-provider supports specifying the loadBalancerIP when a load balancer is created. This field will be ignored if the cloud-provider does not support the feature."
      }
     }
    },

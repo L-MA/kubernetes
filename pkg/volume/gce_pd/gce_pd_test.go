@@ -21,7 +21,7 @@ import (
 	"testing"
 
 	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/latest"
+	"k8s.io/kubernetes/pkg/api/testapi"
 	"k8s.io/kubernetes/pkg/client/unversioned/testclient"
 	"k8s.io/kubernetes/pkg/types"
 	"k8s.io/kubernetes/pkg/util/mount"
@@ -39,10 +39,10 @@ func TestCanSupport(t *testing.T) {
 	if plug.Name() != "kubernetes.io/gce-pd" {
 		t.Errorf("Wrong name: %s", plug.Name())
 	}
-	if !plug.CanSupport(&volume.Spec{Name: "foo", VolumeSource: api.VolumeSource{GCEPersistentDisk: &api.GCEPersistentDiskVolumeSource{}}}) {
+	if !plug.CanSupport(&volume.Spec{Volume: &api.Volume{VolumeSource: api.VolumeSource{GCEPersistentDisk: &api.GCEPersistentDiskVolumeSource{}}}}) {
 		t.Errorf("Expected true")
 	}
-	if !plug.CanSupport(&volume.Spec{Name: "foo", PersistentVolumeSource: api.PersistentVolumeSource{GCEPersistentDisk: &api.GCEPersistentDiskVolumeSource{}}}) {
+	if !plug.CanSupport(&volume.Spec{PersistentVolume: &api.PersistentVolume{Spec: api.PersistentVolumeSpec{PersistentVolumeSource: api.PersistentVolumeSource{GCEPersistentDisk: &api.GCEPersistentDiskVolumeSource{}}}}}) {
 		t.Errorf("Expected true")
 	}
 }
@@ -206,7 +206,7 @@ func TestPersistentClaimReadOnlyFlag(t *testing.T) {
 	o.Add(pv)
 	o.Add(claim)
 	client := &testclient.Fake{}
-	client.AddReactor("*", "*", testclient.ObjectReaction(o, latest.RESTMapper))
+	client.AddReactor("*", "*", testclient.ObjectReaction(o, testapi.Default.RESTMapper()))
 
 	plugMgr := volume.VolumePluginMgr{}
 	plugMgr.InitPlugins(ProbeVolumePlugins(), volume.NewFakeVolumeHost("/tmp/fake", client, nil))

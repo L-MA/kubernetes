@@ -17,6 +17,7 @@ limitations under the License.
 package volume
 
 import (
+	"fmt"
 	"os"
 	"path"
 
@@ -75,7 +76,7 @@ func (f *fakeVolumeHost) NewWrapperCleaner(spec *Spec, podUID types.UID, mounter
 	if err != nil {
 		return nil, err
 	}
-	return plug.NewCleaner(spec.Name, podUID, mounter)
+	return plug.NewCleaner(spec.Name(), podUID, mounter)
 }
 
 func ProbeVolumePlugins(config VolumeConfig) []VolumePlugin {
@@ -112,12 +113,12 @@ func (plugin *FakeVolumePlugin) Name() string {
 }
 
 func (plugin *FakeVolumePlugin) CanSupport(spec *Spec) bool {
-	// TODO: maybe pattern-match on spec.Name to decide?
+	// TODO: maybe pattern-match on spec.Name() to decide?
 	return true
 }
 
 func (plugin *FakeVolumePlugin) NewBuilder(spec *Spec, pod *api.Pod, opts VolumeOptions, mounter mount.Interface) (Builder, error) {
-	return &FakeVolume{pod.UID, spec.Name, plugin}, nil
+	return &FakeVolume{pod.UID, spec.Name(), plugin}, nil
 }
 
 func (plugin *FakeVolumePlugin) NewCleaner(volName string, podUID types.UID, mounter mount.Interface) (Cleaner, error) {
@@ -125,7 +126,7 @@ func (plugin *FakeVolumePlugin) NewCleaner(volName string, podUID types.UID, mou
 }
 
 func (plugin *FakeVolumePlugin) NewRecycler(spec *Spec) (Recycler, error) {
-	return &FakeRecycler{"/attributesTransferredFromSpec"}, nil
+	return &fakeRecycler{"/attributesTransferredFromSpec"}, nil
 }
 
 func (plugin *FakeVolumePlugin) GetAccessModes() []api.PersistentVolumeAccessMode {
@@ -162,15 +163,24 @@ func (fv *FakeVolume) TearDownAt(dir string) error {
 	return os.RemoveAll(dir)
 }
 
-type FakeRecycler struct {
+type fakeRecycler struct {
 	path string
 }
 
-func (fr *FakeRecycler) Recycle() error {
+func (fr *fakeRecycler) Recycle() error {
 	// nil is success, else error
 	return nil
 }
 
-func (fr *FakeRecycler) GetPath() string {
+func (fr *fakeRecycler) GetPath() string {
 	return fr.path
+}
+
+func NewFakeRecycler(spec *Spec, host VolumeHost, config VolumeConfig) (Recycler, error) {
+	if spec.PersistentVolume == nil || spec.PersistentVolume.Spec.HostPath == nil {
+		return nil, fmt.Errorf("fakeRecycler only supports spec.PersistentVolume.Spec.HostPath")
+	}
+	return &fakeRecycler{
+		path: spec.PersistentVolume.Spec.HostPath.Path,
+	}, nil
 }

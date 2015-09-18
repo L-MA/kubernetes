@@ -26,6 +26,7 @@ import (
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/testapi"
 	client "k8s.io/kubernetes/pkg/client/unversioned"
+	"k8s.io/kubernetes/pkg/client/unversioned/fake"
 	"k8s.io/kubernetes/pkg/runtime"
 )
 
@@ -300,7 +301,7 @@ func TestLabelErrors(t *testing.T) {
 		f, tf, _ := NewAPIFactory()
 		tf.Printer = &testPrinter{}
 		tf.Namespace = "test"
-		tf.ClientConfig = &client.Config{Version: testapi.Version()}
+		tf.ClientConfig = &client.Config{Version: testapi.Default.Version()}
 
 		buf := bytes.NewBuffer([]byte{})
 		cmd := NewCmdLabel(f, buf)
@@ -326,9 +327,9 @@ func TestLabelErrors(t *testing.T) {
 func TestLabelForResourceFromFile(t *testing.T) {
 	pods, _, _ := testData()
 	f, tf, codec := NewAPIFactory()
-	tf.Client = &client.FakeRESTClient{
+	tf.Client = &fake.RESTClient{
 		Codec: codec,
-		Client: client.HTTPClientFunc(func(req *http.Request) (*http.Response, error) {
+		Client: fake.HTTPClientFunc(func(req *http.Request) (*http.Response, error) {
 			switch req.Method {
 			case "GET":
 				switch req.URL.Path {
@@ -353,7 +354,7 @@ func TestLabelForResourceFromFile(t *testing.T) {
 		}),
 	}
 	tf.Namespace = "test"
-	tf.ClientConfig = &client.Config{Version: testapi.Version()}
+	tf.ClientConfig = &client.Config{Version: testapi.Default.Version()}
 
 	buf := bytes.NewBuffer([]byte{})
 	cmd := NewCmdLabel(f, buf)
@@ -373,9 +374,9 @@ func TestLabelForResourceFromFile(t *testing.T) {
 func TestLabelMultipleObjects(t *testing.T) {
 	pods, _, _ := testData()
 	f, tf, codec := NewAPIFactory()
-	tf.Client = &client.FakeRESTClient{
+	tf.Client = &fake.RESTClient{
 		Codec: codec,
-		Client: client.HTTPClientFunc(func(req *http.Request) (*http.Response, error) {
+		Client: fake.HTTPClientFunc(func(req *http.Request) (*http.Response, error) {
 			switch req.Method {
 			case "GET":
 				switch req.URL.Path {
@@ -402,7 +403,7 @@ func TestLabelMultipleObjects(t *testing.T) {
 		}),
 	}
 	tf.Namespace = "test"
-	tf.ClientConfig = &client.Config{Version: testapi.Version()}
+	tf.ClientConfig = &client.Config{Version: testapi.Default.Version()}
 
 	buf := bytes.NewBuffer([]byte{})
 	cmd := NewCmdLabel(f, buf)

@@ -28,6 +28,7 @@ import (
 	"github.com/spf13/cobra"
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/errors"
+	"k8s.io/kubernetes/pkg/api/meta"
 	"k8s.io/kubernetes/pkg/api/v1"
 	"k8s.io/kubernetes/pkg/kubectl"
 	cmdutil "k8s.io/kubernetes/pkg/kubectl/cmd/util"
@@ -94,7 +95,7 @@ func NewCmdRollingUpdate(f *cmdutil.Factory, out io.Writer) *cobra.Command {
 	cmd.Flags().String("deployment-label-key", "deployment", "The key to use to differentiate between two different controllers, default 'deployment'.  Only relevant when --image is specified, ignored otherwise")
 	cmd.Flags().Bool("dry-run", false, "If true, print out the changes that would be made, but don't actually make them.")
 	cmd.Flags().Bool("rollback", false, "If true, this is a request to abort an existing rollout that is partially rolled out. It effectively reverses current and next and runs a rollout")
-	cmdutil.AddValidateFlag(cmd)
+	cmdutil.AddValidateFlags(cmd)
 	cmdutil.AddPrinterFlags(cmd)
 	return cmd
 }
@@ -138,6 +139,7 @@ func RunRollingUpdate(f *cmdutil.Factory, out io.Writer, cmd *cobra.Command, arg
 	interval := cmdutil.GetFlagDuration(cmd, "poll-interval")
 	timeout := cmdutil.GetFlagDuration(cmd, "timeout")
 	dryrun := cmdutil.GetFlagBool(cmd, "dry-run")
+	outputFormat := cmdutil.GetFlagString(cmd, "output")
 
 	cmdNamespace, enforceNamespace, err := f.DefaultNamespace()
 	if err != nil {
@@ -170,7 +172,7 @@ func RunRollingUpdate(f *cmdutil.Factory, out io.Writer, cmd *cobra.Command, arg
 	mapper, typer := f.Object()
 
 	if len(filename) != 0 {
-		schema, err := f.Validator(cmdutil.GetFlagBool(cmd, "validate"))
+		schema, err := f.Validator(cmdutil.GetFlagBool(cmd, "validate"), cmdutil.GetFlagString(cmd, "schema-cache-dir"))
 		if err != nil {
 			return err
 		}
@@ -263,12 +265,17 @@ func RunRollingUpdate(f *cmdutil.Factory, out io.Writer, cmd *cobra.Command, arg
 	}
 	if dryrun {
 		oldRcData := &bytes.Buffer{}
-		if err := f.PrintObject(cmd, oldRc, oldRcData); err != nil {
-			return err
-		}
 		newRcData := &bytes.Buffer{}
-		if err := f.PrintObject(cmd, newRc, newRcData); err != nil {
-			return err
+		if outputFormat == "" {
+			oldRcData.WriteString(oldRc.Name)
+			newRcData.WriteString(newRc.Name)
+		} else {
+			if err := f.PrintObject(cmd, oldRc, oldRcData); err != nil {
+				return err
+			}
+			if err := f.PrintObject(cmd, newRc, newRcData); err != nil {
+				return err
+			}
 		}
 		fmt.Fprintf(out, "Rolling from:\n%s\nTo:\n%s\n", string(oldRcData.Bytes()), string(newRcData.Bytes()))
 		return nil
@@ -297,11 +304,25 @@ func RunRollingUpdate(f *cmdutil.Factory, out io.Writer, cmd *cobra.Command, arg
 		return err
 	}
 
+	message := "rolling updated"
 	if keepOldName {
-		fmt.Fprintf(out, "%s\n", oldName)
+		newRc.Name = oldName
 	} else {
-		fmt.Fprintf(out, "%s\n", newRc.Name)
+		message = fmt.Sprintf("rolling updated to %q", newRc.Name)
 	}
+	newRc, err = client.ReplicationControllers(cmdNamespace).Get(newRc.Name)
+	if err != nil {
+		return err
+	}
+	if outputFormat != "" {
+		return f.PrintObject(cmd, newRc, out)
+	}
+	_, kind, err := api.Scheme.ObjectVersionAndKind(newRc)
+	if err != nil {
+		return err
+	}
+	_, res := meta.KindToResource(kind, false)
+	cmdutil.PrintSuccess(mapper, false, out, res, oldName, message)
 	return nil
 }
 

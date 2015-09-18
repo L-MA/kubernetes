@@ -17,13 +17,11 @@ limitations under the License.
 package service
 
 import (
-	"fmt"
 	"io"
 	"math/rand"
 	"net"
 	"net/http"
 	"os"
-	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -63,33 +61,12 @@ type KubeletExecutorServer struct {
 	SuicideTimeout time.Duration
 	ShutdownFD     int
 	ShutdownFIFO   string
-	cgroupRoot     string
-	cgroupPrefix   string
-}
-
-func findMesosCgroup(prefix string) string {
-	// derive our cgroup from MESOS_DIRECTORY environment
-	mesosDir := os.Getenv("MESOS_DIRECTORY")
-	if mesosDir == "" {
-		log.V(2).Infof("cannot derive executor's cgroup because MESOS_DIRECTORY is empty")
-		return ""
-	}
-
-	containerId := path.Base(mesosDir)
-	if containerId == "" {
-		log.V(2).Infof("cannot derive executor's cgroup from MESOS_DIRECTORY=%q", mesosDir)
-		return ""
-	}
-	trimmedPrefix := strings.Trim(prefix, "/")
-	cgroupRoot := fmt.Sprintf("/%s/%v", trimmedPrefix, containerId)
-	return cgroupRoot
 }
 
 func NewKubeletExecutorServer() *KubeletExecutorServer {
 	k := &KubeletExecutorServer{
 		KubeletServer:  app.NewKubeletServer(),
 		SuicideTimeout: config.DefaultSuicideTimeout,
-		cgroupPrefix:   config.DefaultCgroupPrefix,
 	}
 	if pwd, err := os.Getwd(); err != nil {
 		log.Warningf("failed to determine current directory: %v", err)
@@ -107,7 +84,6 @@ func (s *KubeletExecutorServer) AddFlags(fs *pflag.FlagSet) {
 	fs.DurationVar(&s.SuicideTimeout, "suicide-timeout", s.SuicideTimeout, "Self-terminate after this period of inactivity. Zero disables suicide watch.")
 	fs.IntVar(&s.ShutdownFD, "shutdown-fd", s.ShutdownFD, "File descriptor used to signal shutdown to external watchers, requires shutdown-fifo flag")
 	fs.StringVar(&s.ShutdownFIFO, "shutdown-fifo", s.ShutdownFIFO, "FIFO used to signal shutdown to external watchers, requires shutdown-fd flag")
-	fs.StringVar(&s.cgroupPrefix, "cgroup-prefix", s.cgroupPrefix, "The cgroup prefix concatenated with MESOS_DIRECTORY must give the executor cgroup set by Mesos")
 }
 
 // returns a Closer that should be closed to signal impending shutdown, but only if ShutdownFD
@@ -131,20 +107,10 @@ func (s *KubeletExecutorServer) Run(hks hyperkube.Interface, _ []string) error {
 		log.Info(err)
 	}
 
-	// derive the executor cgroup and use it as docker container cgroup root
-	mesosCgroup := findMesosCgroup(s.cgroupPrefix)
-	s.cgroupRoot = mesosCgroup
-	log.V(2).Infof("passing cgroup %q to the kubelet as cgroup root", s.CgroupRoot)
-
 	// empty string for the docker and system containers (= cgroup paths). This
 	// stops the kubelet taking any control over other system processes.
 	s.SystemContainer = ""
 	s.DockerDaemonContainer = ""
-
-	// We set kubelet container to its own cgroup below the executor cgroup.
-	// In contrast to the docker and system container, this has no other
-	// undesired side-effects.
-	s.ResourceContainer = mesosCgroup + "/kubelet"
 
 	// create apiserver client
 	var apiclient *client.Client
@@ -166,7 +132,7 @@ func (s *KubeletExecutorServer) Run(hks hyperkube.Interface, _ []string) error {
 		return err
 	}
 
-	cadvisorInterface, err := cadvisor.New(s.CadvisorPort)
+	cAdvisorInterface, err := cadvisor.New(s.CAdvisorPort)
 	if err != nil {
 		return err
 	}
@@ -237,7 +203,7 @@ func (s *KubeletExecutorServer) Run(hks hyperkube.Interface, _ []string) error {
 		Runonce:                        s.RunOnce,
 		Port:                           s.Port,
 		ReadOnlyPort:                   s.ReadOnlyPort,
-		CadvisorInterface:              cadvisorInterface,
+		CAdvisorInterface:              cAdvisorInterface,
 		EnableServer:                   s.EnableServer,
 		EnableDebuggingHandlers:        s.EnableDebuggingHandlers,
 		DockerClient:                   dockertools.ConnectToDockerOrDie(s.DockerEndpoint),
@@ -253,7 +219,7 @@ func (s *KubeletExecutorServer) Run(hks hyperkube.Interface, _ []string) error {
 		Cloud:                          nil, // TODO(jdef) Cloud, specifying null here because we don't want all kubelets polling mesos-master; need to account for this in the cloudprovider impl
 		NodeStatusUpdateFrequency: s.NodeStatusUpdateFrequency,
 		ResourceContainer:         s.ResourceContainer,
-		CgroupRoot:                s.cgroupRoot,
+		CgroupRoot:                s.CgroupRoot,
 		ContainerRuntime:          s.ContainerRuntime,
 		Mounter:                   mounter,
 		DockerDaemonContainer:     s.DockerDaemonContainer,
@@ -262,6 +228,7 @@ func (s *KubeletExecutorServer) Run(hks hyperkube.Interface, _ []string) error {
 		MaxPods:                   s.MaxPods,
 		DockerExecHandler:         dockerExecHandler,
 		ResolverConfig:            s.ResolverConfig,
+		CPUCFSQuota:               s.CPUCFSQuota,
 	}
 
 	kcfg.NodeName = kcfg.Hostname
@@ -321,7 +288,7 @@ func (ks *KubeletExecutorServer) createAndInitKubelet(
 		MaxContainers:      kc.MaxContainerCount,
 	}
 
-	pc := kconfig.NewPodConfig(kconfig.PodConfigNotificationSnapshotAndUpdates, kc.Recorder)
+	pc := kconfig.NewPodConfig(kconfig.PodConfigNotificationIncremental, kc.Recorder)
 	updates := pc.Channel(MESOS_CFG_SOURCE)
 
 	klet, err := kubelet.NewMainKubelet(
@@ -334,6 +301,8 @@ func (ks *KubeletExecutorServer) createAndInitKubelet(
 		kc.SyncFrequency,
 		float32(kc.RegistryPullQPS),
 		kc.RegistryBurst,
+		kc.EventRecordQPS,
+		kc.EventBurst,
 		gcPolicy,
 		pc.SeenAllSources,
 		kc.RegisterNode,
@@ -346,7 +315,7 @@ func (ks *KubeletExecutorServer) createAndInitKubelet(
 		kc.NetworkPluginName,
 		kc.StreamingConnectionIdleTimeout,
 		kc.Recorder,
-		kc.CadvisorInterface,
+		kc.CAdvisorInterface,
 		kc.ImageGCPolicy,
 		kc.DiskSpacePolicy,
 		kc.Cloud,
@@ -356,6 +325,7 @@ func (ks *KubeletExecutorServer) createAndInitKubelet(
 		kc.CgroupRoot,
 		kc.ContainerRuntime,
 		kc.RktPath,
+		kc.RktStage1Image,
 		kc.Mounter,
 		kc.DockerDaemonContainer,
 		kc.SystemContainer,
@@ -364,6 +334,10 @@ func (ks *KubeletExecutorServer) createAndInitKubelet(
 		kc.MaxPods,
 		kc.DockerExecHandler,
 		kc.ResolverConfig,
+		kc.CPUCFSQuota,
+		&api.NodeDaemonEndpoints{
+			KubeletEndpoint: api.DaemonEndpoint{Port: int(kc.Port)},
+		},
 	)
 	if err != nil {
 		return nil, nil, err

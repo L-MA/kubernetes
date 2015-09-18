@@ -26,13 +26,14 @@ import (
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/endpoints"
 	"k8s.io/kubernetes/pkg/api/errors"
+	"k8s.io/kubernetes/pkg/client/cache"
 	client "k8s.io/kubernetes/pkg/client/unversioned"
-	"k8s.io/kubernetes/pkg/client/unversioned/cache"
 	"k8s.io/kubernetes/pkg/controller/framework"
 	"k8s.io/kubernetes/pkg/fields"
 	"k8s.io/kubernetes/pkg/labels"
 	"k8s.io/kubernetes/pkg/runtime"
 	"k8s.io/kubernetes/pkg/util"
+	"k8s.io/kubernetes/pkg/util/sets"
 	"k8s.io/kubernetes/pkg/util/workqueue"
 	"k8s.io/kubernetes/pkg/watch"
 
@@ -141,8 +142,8 @@ func (e *EndpointController) Run(workers int, stopCh <-chan struct{}) {
 	e.queue.ShutDown()
 }
 
-func (e *EndpointController) getPodServiceMemberships(pod *api.Pod) (util.StringSet, error) {
-	set := util.StringSet{}
+func (e *EndpointController) getPodServiceMemberships(pod *api.Pod) (sets.String, error) {
+	set := sets.String{}
 	services, err := e.serviceStore.GetPodServices(pod)
 	if err != nil {
 		// don't log this error because this function makes pointless
@@ -318,11 +319,6 @@ func (e *EndpointController) syncService(key string) {
 				continue
 			}
 
-			if !api.IsPodReady(pod) {
-				glog.V(5).Infof("Pod is out of service: %v/%v", pod.Namespace, pod.Name)
-				continue
-			}
-
 			epp := api.EndpointPort{Name: portName, Port: portNum, Protocol: portProto}
 			epa := api.EndpointAddress{IP: pod.Status.PodIP, TargetRef: &api.ObjectReference{
 				Kind:            "Pod",
@@ -331,7 +327,18 @@ func (e *EndpointController) syncService(key string) {
 				UID:             pod.ObjectMeta.UID,
 				ResourceVersion: pod.ObjectMeta.ResourceVersion,
 			}}
-			subsets = append(subsets, api.EndpointSubset{Addresses: []api.EndpointAddress{epa}, Ports: []api.EndpointPort{epp}})
+			if api.IsPodReady(pod) {
+				subsets = append(subsets, api.EndpointSubset{
+					Addresses: []api.EndpointAddress{epa},
+					Ports:     []api.EndpointPort{epp},
+				})
+			} else {
+				glog.V(5).Infof("Pod is out of service: %v/%v", pod.Namespace, pod.Name)
+				subsets = append(subsets, api.EndpointSubset{
+					NotReadyAddresses: []api.EndpointAddress{epa},
+					Ports:             []api.EndpointPort{epp},
+				})
+			}
 		}
 	}
 	subsets = endpoints.RepackSubsets(subsets)

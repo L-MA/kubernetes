@@ -26,7 +26,6 @@ import (
 
 	"github.com/golang/glog"
 	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/cloudprovider"
 	"k8s.io/kubernetes/pkg/cloudprovider/providers/aws"
 	"k8s.io/kubernetes/pkg/types"
 	"k8s.io/kubernetes/pkg/util"
@@ -60,7 +59,8 @@ func (plugin *awsElasticBlockStorePlugin) Name() string {
 }
 
 func (plugin *awsElasticBlockStorePlugin) CanSupport(spec *volume.Spec) bool {
-	return spec.PersistentVolumeSource.AWSElasticBlockStore != nil || spec.VolumeSource.AWSElasticBlockStore != nil
+	return (spec.PersistentVolume != nil && spec.PersistentVolume.Spec.AWSElasticBlockStore != nil) ||
+		(spec.Volume != nil && spec.Volume.AWSElasticBlockStore != nil)
 }
 
 func (plugin *awsElasticBlockStorePlugin) GetAccessModes() []api.PersistentVolumeAccessMode {
@@ -79,11 +79,11 @@ func (plugin *awsElasticBlockStorePlugin) newBuilderInternal(spec *volume.Spec, 
 	// EBSs used as a PersistentVolume gets the ReadOnly flag indirectly through the persistent-claim volume used to mount the PV
 	var readOnly bool
 	var ebs *api.AWSElasticBlockStoreVolumeSource
-	if spec.VolumeSource.AWSElasticBlockStore != nil {
-		ebs = spec.VolumeSource.AWSElasticBlockStore
+	if spec.Volume != nil && spec.Volume.AWSElasticBlockStore != nil {
+		ebs = spec.Volume.AWSElasticBlockStore
 		readOnly = ebs.ReadOnly
 	} else {
-		ebs = spec.PersistentVolumeSource.AWSElasticBlockStore
+		ebs = spec.PersistentVolume.Spec.AWSElasticBlockStore
 		readOnly = spec.ReadOnly
 	}
 
@@ -97,7 +97,7 @@ func (plugin *awsElasticBlockStorePlugin) newBuilderInternal(spec *volume.Spec, 
 	return &awsElasticBlockStoreBuilder{
 		awsElasticBlockStore: &awsElasticBlockStore{
 			podUID:   podUID,
-			volName:  spec.Name,
+			volName:  spec.Name(),
 			volumeID: volumeID,
 			manager:  manager,
 			mounter:  mounter,
@@ -132,7 +132,7 @@ type ebsManager interface {
 	DetachDisk(c *awsElasticBlockStoreCleaner) error
 }
 
-// awsElasticBlockStore volumes are disk resources provided by Google Compute Engine
+// awsElasticBlockStore volumes are disk resources provided by Amazon Web Services
 // that are attached to the kubelet's host machine and exposed to the pod.
 type awsElasticBlockStore struct {
 	volName string
@@ -155,11 +155,7 @@ func detachDiskLogError(ebs *awsElasticBlockStore) {
 
 // getVolumeProvider returns the AWS Volumes interface
 func (ebs *awsElasticBlockStore) getVolumeProvider() (aws_cloud.Volumes, error) {
-	name := "aws"
-	cloud, err := cloudprovider.GetCloudProvider(name, nil)
-	if err != nil {
-		return nil, err
-	}
+	cloud := ebs.plugin.host.GetCloudProvider()
 	volumes, ok := cloud.(aws_cloud.Volumes)
 	if !ok {
 		return nil, fmt.Errorf("Cloud provider does not support volumes")

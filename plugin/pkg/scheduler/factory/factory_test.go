@@ -24,10 +24,9 @@ import (
 	"time"
 
 	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/latest"
 	"k8s.io/kubernetes/pkg/api/testapi"
+	"k8s.io/kubernetes/pkg/client/cache"
 	client "k8s.io/kubernetes/pkg/client/unversioned"
-	"k8s.io/kubernetes/pkg/client/unversioned/cache"
 	"k8s.io/kubernetes/pkg/runtime"
 	"k8s.io/kubernetes/pkg/util"
 	"k8s.io/kubernetes/plugin/pkg/scheduler/algorithm"
@@ -43,7 +42,7 @@ func TestCreate(t *testing.T) {
 	}
 	server := httptest.NewServer(&handler)
 	defer server.Close()
-	client := client.NewOrDie(&client.Config{Host: server.URL, Version: testapi.Version()})
+	client := client.NewOrDie(&client.Config{Host: server.URL, Version: testapi.Default.Version()})
 	factory := NewConfigFactory(client, nil)
 	factory.Create()
 }
@@ -61,7 +60,7 @@ func TestCreateFromConfig(t *testing.T) {
 	}
 	server := httptest.NewServer(&handler)
 	defer server.Close()
-	client := client.NewOrDie(&client.Config{Host: server.URL, Version: testapi.Version()})
+	client := client.NewOrDie(&client.Config{Host: server.URL, Version: testapi.Default.Version()})
 	factory := NewConfigFactory(client, nil)
 
 	// Pre-register some predicate and priority functions
@@ -103,7 +102,7 @@ func TestCreateFromEmptyConfig(t *testing.T) {
 	}
 	server := httptest.NewServer(&handler)
 	defer server.Close()
-	client := client.NewOrDie(&client.Config{Host: server.URL, Version: testapi.Version()})
+	client := client.NewOrDie(&client.Config{Host: server.URL, Version: testapi.Default.Version()})
 	factory := NewConfigFactory(client, nil)
 
 	configData = []byte(`{}`)
@@ -123,11 +122,11 @@ func PredicateTwo(pod *api.Pod, existingPods []*api.Pod, node string) (bool, err
 	return true, nil
 }
 
-func PriorityOne(pod *api.Pod, podLister algorithm.PodLister, minionLister algorithm.MinionLister) (algorithm.HostPriorityList, error) {
+func PriorityOne(pod *api.Pod, podLister algorithm.PodLister, nodeLister algorithm.NodeLister) (algorithm.HostPriorityList, error) {
 	return []algorithm.HostPriority{}, nil
 }
 
-func PriorityTwo(pod *api.Pod, podLister algorithm.PodLister, minionLister algorithm.MinionLister) (algorithm.HostPriorityList, error) {
+func PriorityTwo(pod *api.Pod, podLister algorithm.PodLister, nodeLister algorithm.NodeLister) (algorithm.HostPriorityList, error) {
 	return []algorithm.HostPriority{}, nil
 }
 
@@ -143,16 +142,16 @@ func TestDefaultErrorFunc(t *testing.T) {
 	}
 	handler := util.FakeHandler{
 		StatusCode:   200,
-		ResponseBody: runtime.EncodeOrDie(latest.Codec, testPod),
+		ResponseBody: runtime.EncodeOrDie(testapi.Default.Codec(), testPod),
 		T:            t,
 	}
 	mux := http.NewServeMux()
 
 	// FakeHandler musn't be sent requests other than the one you want to test.
-	mux.Handle(testapi.ResourcePath("pods", "bar", "foo"), &handler)
+	mux.Handle(testapi.Default.ResourcePath("pods", "bar", "foo"), &handler)
 	server := httptest.NewServer(mux)
 	defer server.Close()
-	factory := NewConfigFactory(client.NewOrDie(&client.Config{Host: server.URL, Version: testapi.Version()}), nil)
+	factory := NewConfigFactory(client.NewOrDie(&client.Config{Host: server.URL, Version: testapi.Default.Version()}), nil)
 	queue := cache.NewFIFO(cache.MetaNamespaceKeyFunc)
 	podBackoff := podBackoff{
 		perPodBackoff:   map[string]*backoffEntry{},
@@ -172,7 +171,7 @@ func TestDefaultErrorFunc(t *testing.T) {
 		if !exists {
 			continue
 		}
-		handler.ValidateRequest(t, testapi.ResourcePath("pods", "bar", "foo"), "GET", nil)
+		handler.ValidateRequest(t, testapi.Default.ResourcePath("pods", "bar", "foo"), "GET", nil)
 		if e, a := testPod, got; !reflect.DeepEqual(e, a) {
 			t.Errorf("Expected %v, got %v", e, a)
 		}
@@ -180,7 +179,7 @@ func TestDefaultErrorFunc(t *testing.T) {
 	}
 }
 
-func TestMinionEnumerator(t *testing.T) {
+func TestNodeEnumerator(t *testing.T) {
 	testList := &api.NodeList{
 		Items: []api.Node{
 			{ObjectMeta: api.ObjectMeta{Name: "foo"}},
@@ -235,15 +234,15 @@ func TestBind(t *testing.T) {
 		}
 		server := httptest.NewServer(&handler)
 		defer server.Close()
-		client := client.NewOrDie(&client.Config{Host: server.URL, Version: testapi.Version()})
+		client := client.NewOrDie(&client.Config{Host: server.URL, Version: testapi.Default.Version()})
 		b := binder{client}
 
 		if err := b.Bind(item.binding); err != nil {
 			t.Errorf("Unexpected error: %v", err)
 			continue
 		}
-		expectedBody := runtime.EncodeOrDie(testapi.Codec(), item.binding)
-		handler.ValidateRequest(t, testapi.ResourcePath("bindings", api.NamespaceDefault, ""), "POST", &expectedBody)
+		expectedBody := runtime.EncodeOrDie(testapi.Default.Codec(), item.binding)
+		handler.ValidateRequest(t, testapi.Default.ResourcePath("bindings", api.NamespaceDefault, ""), "POST", &expectedBody)
 	}
 }
 

@@ -28,12 +28,13 @@ import (
 
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/testapi"
+	"k8s.io/kubernetes/pkg/client/cache"
+	"k8s.io/kubernetes/pkg/client/record"
 	client "k8s.io/kubernetes/pkg/client/unversioned"
-	"k8s.io/kubernetes/pkg/client/unversioned/cache"
-	"k8s.io/kubernetes/pkg/client/unversioned/record"
 	"k8s.io/kubernetes/pkg/runtime"
 	"k8s.io/kubernetes/pkg/securitycontext"
 	"k8s.io/kubernetes/pkg/util"
+	"k8s.io/kubernetes/pkg/util/sets"
 )
 
 // NewFakeControllerExpectationsLookup creates a fake store for PodExpectations.
@@ -48,7 +49,7 @@ func NewFakeControllerExpectationsLookup(ttl time.Duration) (*ControllerExpectat
 
 func newReplicationController(replicas int) *api.ReplicationController {
 	rc := &api.ReplicationController{
-		TypeMeta: api.TypeMeta{APIVersion: testapi.Version()},
+		TypeMeta: api.TypeMeta{APIVersion: testapi.Default.Version()},
 		ObjectMeta: api.ObjectMeta{
 			UID:             util.NewUUID(),
 			Name:            "foobar",
@@ -181,14 +182,14 @@ func TestControllerExpectations(t *testing.T) {
 
 func TestCreateReplica(t *testing.T) {
 	ns := api.NamespaceDefault
-	body := runtime.EncodeOrDie(testapi.Codec(), &api.Pod{ObjectMeta: api.ObjectMeta{Name: "empty_pod"}})
+	body := runtime.EncodeOrDie(testapi.Default.Codec(), &api.Pod{ObjectMeta: api.ObjectMeta{Name: "empty_pod"}})
 	fakeHandler := util.FakeHandler{
 		StatusCode:   200,
 		ResponseBody: string(body),
 	}
 	testServer := httptest.NewServer(&fakeHandler)
 	defer testServer.Close()
-	client := client.NewOrDie(&client.Config{Host: testServer.URL, Version: testapi.Version()})
+	client := client.NewOrDie(&client.Config{Host: testServer.URL, Version: testapi.Default.Version()})
 
 	podControl := RealPodControl{
 		KubeClient: client,
@@ -207,7 +208,7 @@ func TestCreateReplica(t *testing.T) {
 		},
 		Spec: controllerSpec.Spec.Template.Spec,
 	}
-	fakeHandler.ValidateRequest(t, testapi.ResourcePath("pods", api.NamespaceDefault, ""), "POST", nil)
+	fakeHandler.ValidateRequest(t, testapi.Default.ResourcePath("pods", api.NamespaceDefault, ""), "POST", nil)
 	actualPod, err := client.Codec.Decode([]byte(fakeHandler.RequestBody))
 	if err != nil {
 		t.Errorf("Unexpected error: %#v", err)
@@ -224,13 +225,13 @@ func TestActivePodFiltering(t *testing.T) {
 	podList := newPodList(nil, 5, api.PodRunning, rc)
 	podList.Items[0].Status.Phase = api.PodSucceeded
 	podList.Items[1].Status.Phase = api.PodFailed
-	expectedNames := util.NewStringSet()
+	expectedNames := sets.NewString()
 	for _, pod := range podList.Items[2:] {
 		expectedNames.Insert(pod.Name)
 	}
 
 	got := FilterActivePods(podList.Items)
-	gotNames := util.NewStringSet()
+	gotNames := sets.NewString()
 	for _, pod := range got {
 		gotNames.Insert(pod.Name)
 	}

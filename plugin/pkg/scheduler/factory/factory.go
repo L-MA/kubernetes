@@ -25,11 +25,12 @@ import (
 
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/errors"
+	"k8s.io/kubernetes/pkg/client/cache"
 	client "k8s.io/kubernetes/pkg/client/unversioned"
-	"k8s.io/kubernetes/pkg/client/unversioned/cache"
 	"k8s.io/kubernetes/pkg/controller/framework"
 	"k8s.io/kubernetes/pkg/fields"
 	"k8s.io/kubernetes/pkg/util"
+	"k8s.io/kubernetes/pkg/util/sets"
 	"k8s.io/kubernetes/plugin/pkg/scheduler"
 	"k8s.io/kubernetes/plugin/pkg/scheduler/algorithm"
 	schedulerapi "k8s.io/kubernetes/plugin/pkg/scheduler/api"
@@ -47,7 +48,7 @@ type ConfigFactory struct {
 	ScheduledPodLister *cache.StoreToPodLister
 	// a means to list all known scheduled pods and pods assumed to have been scheduled.
 	PodLister algorithm.PodLister
-	// a means to list all minions
+	// a means to list all nodes
 	NodeLister *cache.StoreToNodeLister
 	// a means to list all services
 	ServiceLister *cache.StoreToServiceLister
@@ -137,13 +138,13 @@ func (f *ConfigFactory) CreateFromConfig(policy schedulerapi.Policy) (*scheduler
 		return nil, err
 	}
 
-	predicateKeys := util.NewStringSet()
+	predicateKeys := sets.NewString()
 	for _, predicate := range policy.Predicates {
 		glog.V(2).Infof("Registering predicate: %s", predicate.Name)
 		predicateKeys.Insert(RegisterCustomFitPredicate(predicate))
 	}
 
-	priorityKeys := util.NewStringSet()
+	priorityKeys := sets.NewString()
 	for _, priority := range policy.Priorities {
 		glog.V(2).Infof("Registering priority: %s", priority.Name)
 		priorityKeys.Insert(RegisterCustomPriorityFunction(priority))
@@ -153,7 +154,7 @@ func (f *ConfigFactory) CreateFromConfig(policy schedulerapi.Policy) (*scheduler
 }
 
 // Creates a scheduler from a set of registered fit predicate keys and priority keys.
-func (f *ConfigFactory) CreateFromKeys(predicateKeys, priorityKeys util.StringSet) (*scheduler.Config, error) {
+func (f *ConfigFactory) CreateFromKeys(predicateKeys, priorityKeys sets.String) (*scheduler.Config, error) {
 	glog.V(2).Infof("creating scheduler with fit predicates '%v' and priority functions '%v", predicateKeys, priorityKeys)
 	pluginArgs := PluginFactoryArgs{
 		PodLister:        f.PodLister,
@@ -179,9 +180,9 @@ func (f *ConfigFactory) CreateFromKeys(predicateKeys, priorityKeys util.StringSe
 	// Begin populating scheduled pods.
 	go f.scheduledPodPopulator.Run(f.StopEverything)
 
-	// Watch minions.
-	// Minions may be listed frequently, so provide a local up-to-date cache.
-	cache.NewReflector(f.createMinionLW(), &api.Node{}, f.NodeLister.Store, 0).RunUntil(f.StopEverything)
+	// Watch nodes.
+	// Nodes may be listed frequently, so provide a local up-to-date cache.
+	cache.NewReflector(f.createNodeLW(), &api.Node{}, f.NodeLister.Store, 0).RunUntil(f.StopEverything)
 
 	// Watch and cache all service objects. Scheduler needs to find all pods
 	// created by the same services or ReplicationControllers, so that it can spread them correctly.
@@ -208,9 +209,9 @@ func (f *ConfigFactory) CreateFromKeys(predicateKeys, priorityKeys util.StringSe
 	return &scheduler.Config{
 		Modeler: f.modeler,
 		// The scheduler only needs to consider schedulable nodes.
-		MinionLister: f.NodeLister.NodeCondition(api.NodeReady, api.ConditionTrue),
-		Algorithm:    algo,
-		Binder:       &binder{f.Client},
+		NodeLister: f.NodeLister.NodeCondition(api.NodeReady, api.ConditionTrue),
+		Algorithm:  algo,
+		Binder:     &binder{f.Client},
 		NextPod: func() *api.Pod {
 			pod := f.PodQueue.Pop().(*api.Pod)
 			glog.V(2).Infof("About to try and schedule pod %v", pod.Name)
@@ -244,8 +245,8 @@ func (factory *ConfigFactory) createAssignedPodLW() *cache.ListWatch {
 		parseSelectorOrDie(client.PodHost+"!="))
 }
 
-// createMinionLW returns a cache.ListWatch that gets all changes to minions.
-func (factory *ConfigFactory) createMinionLW() *cache.ListWatch {
+// createNodeLW returns a cache.ListWatch that gets all changes to nodes.
+func (factory *ConfigFactory) createNodeLW() *cache.ListWatch {
 	// TODO: Filter out nodes that doesn't have NodeReady condition.
 	fields := fields.Set{client.NodeUnschedulable: "false"}.AsSelector()
 	return cache.NewListWatchFromClient(factory.Client, "nodes", api.NamespaceAll, fields)

@@ -34,7 +34,6 @@ import (
 
 	"k8s.io/kubernetes/pkg/api"
 	apierrors "k8s.io/kubernetes/pkg/api/errors"
-	"k8s.io/kubernetes/pkg/api/latest"
 	"k8s.io/kubernetes/pkg/api/testapi"
 	"k8s.io/kubernetes/pkg/labels"
 	"k8s.io/kubernetes/pkg/runtime"
@@ -47,7 +46,7 @@ import (
 func TestRequestWithErrorWontChange(t *testing.T) {
 	original := Request{
 		err:        errors.New("test"),
-		apiVersion: testapi.Version(),
+		apiVersion: testapi.Default.Version(),
 	}
 	r := original
 	changed := r.Param("foo", "bar").
@@ -193,7 +192,7 @@ func TestRequestBody(t *testing.T) {
 	}
 
 	// test unencodable api object
-	r = (&Request{codec: latest.Codec}).Body(&NotAnAPIObject{})
+	r = (&Request{codec: testapi.Default.Codec()}).Body(&NotAnAPIObject{})
 	if r.err == nil || r.body != nil {
 		t.Errorf("should have set err and left body nil: %#v", r)
 	}
@@ -269,7 +268,7 @@ func TestTransformResponse(t *testing.T) {
 		{Response: &http.Response{StatusCode: 200, Body: ioutil.NopCloser(bytes.NewReader(invalid))}, Data: invalid},
 	}
 	for i, test := range testCases {
-		r := NewRequest(nil, "", uri, testapi.Version(), testapi.Codec())
+		r := NewRequest(nil, "", uri, testapi.Default.Version(), testapi.Default.Codec())
 		if test.Response.Body == nil {
 			test.Response.Body = ioutil.NopCloser(bytes.NewReader([]byte{}))
 		}
@@ -356,7 +355,7 @@ func TestTransformUnstructuredError(t *testing.T) {
 
 	for _, testCase := range testCases {
 		r := &Request{
-			codec:        latest.Codec,
+			codec:        testapi.Default.Codec(),
 			resourceName: testCase.Name,
 			resource:     testCase.Resource,
 		}
@@ -407,7 +406,7 @@ func TestRequestWatch(t *testing.T) {
 		},
 		{
 			Request: &Request{
-				codec: testapi.Codec(),
+				codec: testapi.Default.Codec(),
 				client: clientFunc(func(req *http.Request) (*http.Response, error) {
 					return &http.Response{StatusCode: http.StatusForbidden}, nil
 				}),
@@ -420,7 +419,7 @@ func TestRequestWatch(t *testing.T) {
 		},
 		{
 			Request: &Request{
-				codec: testapi.Codec(),
+				codec: testapi.Default.Codec(),
 				client: clientFunc(func(req *http.Request) (*http.Response, error) {
 					return &http.Response{StatusCode: http.StatusUnauthorized}, nil
 				}),
@@ -433,11 +432,11 @@ func TestRequestWatch(t *testing.T) {
 		},
 		{
 			Request: &Request{
-				codec: testapi.Codec(),
+				codec: testapi.Default.Codec(),
 				client: clientFunc(func(req *http.Request) (*http.Response, error) {
 					return &http.Response{
 						StatusCode: http.StatusUnauthorized,
-						Body: ioutil.NopCloser(bytes.NewReader([]byte(runtime.EncodeOrDie(testapi.Codec(), &api.Status{
+						Body: ioutil.NopCloser(bytes.NewReader([]byte(runtime.EncodeOrDie(testapi.Default.Codec(), &api.Status{
 							Status: api.StatusFailure,
 							Reason: api.StatusReasonUnauthorized,
 						})))),
@@ -537,13 +536,13 @@ func TestRequestStream(t *testing.T) {
 				client: clientFunc(func(req *http.Request) (*http.Response, error) {
 					return &http.Response{
 						StatusCode: http.StatusUnauthorized,
-						Body: ioutil.NopCloser(bytes.NewReader([]byte(runtime.EncodeOrDie(testapi.Codec(), &api.Status{
+						Body: ioutil.NopCloser(bytes.NewReader([]byte(runtime.EncodeOrDie(testapi.Default.Codec(), &api.Status{
 							Status: api.StatusFailure,
 							Reason: api.StatusReasonUnauthorized,
 						})))),
 					}, nil
 				}),
-				codec:   latest.Codec,
+				codec:   testapi.Default.Codec(),
 				baseURL: &url.URL{},
 			},
 			Err: true,
@@ -629,7 +628,7 @@ func TestRequestUpgrade(t *testing.T) {
 			Err: true,
 		},
 		{
-			Request: NewRequest(nil, "", uri, testapi.Version(), testapi.Codec()),
+			Request: NewRequest(nil, "", uri, testapi.Default.Version(), testapi.Default.Codec()),
 			Config: &Config{
 				Username: "u",
 				Password: "p",
@@ -638,7 +637,7 @@ func TestRequestUpgrade(t *testing.T) {
 			Err:             false,
 		},
 		{
-			Request: NewRequest(nil, "", uri, testapi.Version(), testapi.Codec()),
+			Request: NewRequest(nil, "", uri, testapi.Default.Version(), testapi.Default.Codec()),
 			Config: &Config{
 				BearerToken: "b",
 			},
@@ -719,7 +718,7 @@ func TestDoRequestNewWay(t *testing.T) {
 		Port:       12345,
 		TargetPort: util.NewIntOrStringFromInt(12345),
 	}}}}
-	expectedBody, _ := testapi.Codec().Encode(expectedObj)
+	expectedBody, _ := testapi.Default.Codec().Encode(expectedObj)
 	fakeHandler := util.FakeHandler{
 		StatusCode:   200,
 		ResponseBody: string(expectedBody),
@@ -727,7 +726,7 @@ func TestDoRequestNewWay(t *testing.T) {
 	}
 	testServer := httptest.NewServer(&fakeHandler)
 	defer testServer.Close()
-	c := NewOrDie(&Config{Host: testServer.URL, Version: testapi.Version(), Username: "user", Password: "pass"})
+	c := NewOrDie(&Config{Host: testServer.URL, Version: testapi.Default.Version(), Username: "user", Password: "pass"})
 	obj, err := c.Verb("POST").
 		Prefix("foo", "bar").
 		Suffix("baz").
@@ -743,7 +742,7 @@ func TestDoRequestNewWay(t *testing.T) {
 	} else if !api.Semantic.DeepDerivative(expectedObj, obj) {
 		t.Errorf("Expected: %#v, got %#v", expectedObj, obj)
 	}
-	requestURL := testapi.ResourcePathWithPrefix("foo/bar", "", "", "baz")
+	requestURL := testapi.Default.ResourcePathWithPrefix("foo/bar", "", "", "baz")
 	requestURL += "?timeout=1s"
 	fakeHandler.ValidateRequest(t, requestURL, "POST", &reqBody)
 	if fakeHandler.RequestReceived.Header["Authorization"] == nil {
@@ -767,7 +766,7 @@ func TestCheckRetryClosesBody(t *testing.T) {
 	}))
 	defer testServer.Close()
 
-	c := NewOrDie(&Config{Host: testServer.URL, Version: testapi.Version(), Username: "user", Password: "pass"})
+	c := NewOrDie(&Config{Host: testServer.URL, Version: testapi.Default.Version(), Username: "user", Password: "pass"})
 	_, err := c.Verb("POST").
 		Prefix("foo", "bar").
 		Suffix("baz").
@@ -796,7 +795,7 @@ func BenchmarkCheckRetryClosesBody(t *testing.B) {
 	}))
 	defer testServer.Close()
 
-	c := NewOrDie(&Config{Host: testServer.URL, Version: testapi.Version(), Username: "user", Password: "pass"})
+	c := NewOrDie(&Config{Host: testServer.URL, Version: testapi.Default.Version(), Username: "user", Password: "pass"})
 	r := c.Verb("POST").
 		Prefix("foo", "bar").
 		Suffix("baz").
@@ -811,20 +810,20 @@ func BenchmarkCheckRetryClosesBody(t *testing.B) {
 }
 func TestDoRequestNewWayReader(t *testing.T) {
 	reqObj := &api.Pod{ObjectMeta: api.ObjectMeta{Name: "foo"}}
-	reqBodyExpected, _ := testapi.Codec().Encode(reqObj)
+	reqBodyExpected, _ := testapi.Default.Codec().Encode(reqObj)
 	expectedObj := &api.Service{Spec: api.ServiceSpec{Ports: []api.ServicePort{{
 		Protocol:   "TCP",
 		Port:       12345,
 		TargetPort: util.NewIntOrStringFromInt(12345),
 	}}}}
-	expectedBody, _ := testapi.Codec().Encode(expectedObj)
+	expectedBody, _ := testapi.Default.Codec().Encode(expectedObj)
 	fakeHandler := util.FakeHandler{
 		StatusCode:   200,
 		ResponseBody: string(expectedBody),
 		T:            t,
 	}
 	testServer := httptest.NewServer(&fakeHandler)
-	c := NewOrDie(&Config{Host: testServer.URL, Version: testapi.Version(), Username: "user", Password: "pass"})
+	c := NewOrDie(&Config{Host: testServer.URL, Version: testapi.Default.Version(), Username: "user", Password: "pass"})
 	obj, err := c.Verb("POST").
 		Resource("bar").
 		Name("baz").
@@ -843,8 +842,8 @@ func TestDoRequestNewWayReader(t *testing.T) {
 		t.Errorf("Expected: %#v, got %#v", expectedObj, obj)
 	}
 	tmpStr := string(reqBodyExpected)
-	requestURL := testapi.ResourcePathWithPrefix("foo", "bar", "", "baz")
-	requestURL += "?" + api.LabelSelectorQueryParam(testapi.Version()) + "=name%3Dfoo&timeout=1s"
+	requestURL := testapi.Default.ResourcePathWithPrefix("foo", "bar", "", "baz")
+	requestURL += "?" + api.LabelSelectorQueryParam(testapi.Default.Version()) + "=name%3Dfoo&timeout=1s"
 	fakeHandler.ValidateRequest(t, requestURL, "POST", &tmpStr)
 	if fakeHandler.RequestReceived.Header["Authorization"] == nil {
 		t.Errorf("Request is missing authorization header: %#v", *fakeHandler.RequestReceived)
@@ -853,20 +852,20 @@ func TestDoRequestNewWayReader(t *testing.T) {
 
 func TestDoRequestNewWayObj(t *testing.T) {
 	reqObj := &api.Pod{ObjectMeta: api.ObjectMeta{Name: "foo"}}
-	reqBodyExpected, _ := testapi.Codec().Encode(reqObj)
+	reqBodyExpected, _ := testapi.Default.Codec().Encode(reqObj)
 	expectedObj := &api.Service{Spec: api.ServiceSpec{Ports: []api.ServicePort{{
 		Protocol:   "TCP",
 		Port:       12345,
 		TargetPort: util.NewIntOrStringFromInt(12345),
 	}}}}
-	expectedBody, _ := testapi.Codec().Encode(expectedObj)
+	expectedBody, _ := testapi.Default.Codec().Encode(expectedObj)
 	fakeHandler := util.FakeHandler{
 		StatusCode:   200,
 		ResponseBody: string(expectedBody),
 		T:            t,
 	}
 	testServer := httptest.NewServer(&fakeHandler)
-	c := NewOrDie(&Config{Host: testServer.URL, Version: testapi.Version(), Username: "user", Password: "pass"})
+	c := NewOrDie(&Config{Host: testServer.URL, Version: testapi.Default.Version(), Username: "user", Password: "pass"})
 	obj, err := c.Verb("POST").
 		Suffix("baz").
 		Name("bar").
@@ -885,8 +884,8 @@ func TestDoRequestNewWayObj(t *testing.T) {
 		t.Errorf("Expected: %#v, got %#v", expectedObj, obj)
 	}
 	tmpStr := string(reqBodyExpected)
-	requestURL := testapi.ResourcePath("foo", "", "bar/baz")
-	requestURL += "?" + api.LabelSelectorQueryParam(testapi.Version()) + "=name%3Dfoo&timeout=1s"
+	requestURL := testapi.Default.ResourcePath("foo", "", "bar/baz")
+	requestURL += "?" + api.LabelSelectorQueryParam(testapi.Default.Version()) + "=name%3Dfoo&timeout=1s"
 	fakeHandler.ValidateRequest(t, requestURL, "POST", &tmpStr)
 	if fakeHandler.RequestReceived.Header["Authorization"] == nil {
 		t.Errorf("Request is missing authorization header: %#v", *fakeHandler.RequestReceived)
@@ -895,7 +894,7 @@ func TestDoRequestNewWayObj(t *testing.T) {
 
 func TestDoRequestNewWayFile(t *testing.T) {
 	reqObj := &api.Pod{ObjectMeta: api.ObjectMeta{Name: "foo"}}
-	reqBodyExpected, err := testapi.Codec().Encode(reqObj)
+	reqBodyExpected, err := testapi.Default.Codec().Encode(reqObj)
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
@@ -915,14 +914,14 @@ func TestDoRequestNewWayFile(t *testing.T) {
 		Port:       12345,
 		TargetPort: util.NewIntOrStringFromInt(12345),
 	}}}}
-	expectedBody, _ := testapi.Codec().Encode(expectedObj)
+	expectedBody, _ := testapi.Default.Codec().Encode(expectedObj)
 	fakeHandler := util.FakeHandler{
 		StatusCode:   200,
 		ResponseBody: string(expectedBody),
 		T:            t,
 	}
 	testServer := httptest.NewServer(&fakeHandler)
-	c := NewOrDie(&Config{Host: testServer.URL, Version: testapi.Version(), Username: "user", Password: "pass"})
+	c := NewOrDie(&Config{Host: testServer.URL, Version: testapi.Default.Version(), Username: "user", Password: "pass"})
 	wasCreated := true
 	obj, err := c.Verb("POST").
 		Prefix("foo/bar", "baz").
@@ -942,7 +941,7 @@ func TestDoRequestNewWayFile(t *testing.T) {
 		t.Errorf("expected object was not created")
 	}
 	tmpStr := string(reqBodyExpected)
-	requestURL := testapi.ResourcePathWithPrefix("foo/bar/baz", "", "", "")
+	requestURL := testapi.Default.ResourcePathWithPrefix("foo/bar/baz", "", "", "")
 	requestURL += "?timeout=1s"
 	fakeHandler.ValidateRequest(t, requestURL, "POST", &tmpStr)
 	if fakeHandler.RequestReceived.Header["Authorization"] == nil {
@@ -952,7 +951,7 @@ func TestDoRequestNewWayFile(t *testing.T) {
 
 func TestWasCreated(t *testing.T) {
 	reqObj := &api.Pod{ObjectMeta: api.ObjectMeta{Name: "foo"}}
-	reqBodyExpected, err := testapi.Codec().Encode(reqObj)
+	reqBodyExpected, err := testapi.Default.Codec().Encode(reqObj)
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
@@ -962,14 +961,14 @@ func TestWasCreated(t *testing.T) {
 		Port:       12345,
 		TargetPort: util.NewIntOrStringFromInt(12345),
 	}}}}
-	expectedBody, _ := testapi.Codec().Encode(expectedObj)
+	expectedBody, _ := testapi.Default.Codec().Encode(expectedObj)
 	fakeHandler := util.FakeHandler{
 		StatusCode:   201,
 		ResponseBody: string(expectedBody),
 		T:            t,
 	}
 	testServer := httptest.NewServer(&fakeHandler)
-	c := NewOrDie(&Config{Host: testServer.URL, Version: testapi.Version(), Username: "user", Password: "pass"})
+	c := NewOrDie(&Config{Host: testServer.URL, Version: testapi.Default.Version(), Username: "user", Password: "pass"})
 	wasCreated := false
 	obj, err := c.Verb("PUT").
 		Prefix("foo/bar", "baz").
@@ -990,7 +989,7 @@ func TestWasCreated(t *testing.T) {
 	}
 
 	tmpStr := string(reqBodyExpected)
-	requestURL := testapi.ResourcePathWithPrefix("foo/bar/baz", "", "", "")
+	requestURL := testapi.Default.ResourcePathWithPrefix("foo/bar/baz", "", "", "")
 	requestURL += "?timeout=1s"
 	fakeHandler.ValidateRequest(t, requestURL, "PUT", &tmpStr)
 	if fakeHandler.RequestReceived.Header["Authorization"] == nil {
@@ -1185,7 +1184,7 @@ func TestWatch(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		flusher.Flush()
 
-		encoder := watchjson.NewEncoder(w, latest.Codec)
+		encoder := watchjson.NewEncoder(w, testapi.Default.Codec())
 		for _, item := range table {
 			if err := encoder.Encode(&watch.Event{Type: item.t, Object: item.obj}); err != nil {
 				panic(err)
@@ -1196,7 +1195,7 @@ func TestWatch(t *testing.T) {
 
 	s, err := New(&Config{
 		Host:     testServer.URL,
-		Version:  testapi.Version(),
+		Version:  testapi.Default.Version(),
 		Username: "user",
 		Password: "pass",
 	})
@@ -1246,7 +1245,7 @@ func TestStream(t *testing.T) {
 
 	s, err := New(&Config{
 		Host:     testServer.URL,
-		Version:  testapi.Version(),
+		Version:  testapi.Default.Version(),
 		Username: "user",
 		Password: "pass",
 	})

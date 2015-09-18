@@ -79,8 +79,8 @@ done
 echo "127.0.0.1 localhost" >> /etc/hosts # enables cmds like 'kubectl get pods' on master.
 echo "$MASTER_IP $MASTER_NAME" >> /etc/hosts
 
-# Configure the openvswitch network
-provision-network
+# Configure the master network
+provision-network-master
 
 # Update salt configuration
 mkdir -p /etc/salt/minion.d
@@ -108,6 +108,7 @@ grains:
   runtime_config: '$(echo "$RUNTIME_CONFIG" | sed -e "s/'/''/g")'
   docker_opts: '$(echo "$DOCKER_OPTS" | sed -e "s/'/''/g")'
   master_extra_sans: '$(echo "$MASTER_EXTRA_SANS" | sed -e "s/'/''/g")'
+  keep_host_etcd: true
 EOF
 
 mkdir -p /srv/salt-overlay/pillar
@@ -126,6 +127,7 @@ cat <<EOF >/srv/salt-overlay/pillar/cluster-params.sls
   dns_domain: '$(echo "$DNS_DOMAIN" | sed -e "s/'/''/g")'
   instance_prefix: '$(echo "$INSTANCE_PREFIX" | sed -e "s/'/''/g")'
   admission_control: '$(echo "$ADMISSION_CONTROL" | sed -e "s/'/''/g")'
+  enable_cpu_cfs_quota: '$(echo "$ENABLE_CPU_CFS_QUOTA" | sed -e "s/'/''/g")'
 EOF
 
 # Configure the salt-master
@@ -251,6 +253,19 @@ pushd /kube-install
   cp "$server_binary_tar" .
   ./kubernetes/saltbase/install.sh "${server_binary_tar##*/}"
 popd
+
+# Enable Fedora Cockpit on host to support Kubernetes administration
+# Access it by going to <master-ip>:9090 and login as vagrant/vagrant
+if ! which /usr/libexec/cockpit-ws &>/dev/null; then
+  
+  pushd /etc/yum.repos.d
+    wget https://copr.fedoraproject.org/coprs/sgallagh/cockpit-preview/repo/fedora-21/sgallagh-cockpit-preview-fedora-21.repo
+    yum install -y cockpit cockpit-kubernetes  
+  popd
+
+  systemctl enable cockpit.socket
+  systemctl start cockpit.socket
+fi
 
 # we will run provision to update code each time we test, so we do not want to do salt installs each time
 if ! which salt-master &>/dev/null; then

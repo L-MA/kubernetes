@@ -302,6 +302,7 @@ func deepCopy_api_ContainerStateTerminated(in ContainerStateTerminated, out *Con
 
 func deepCopy_api_ContainerStateWaiting(in ContainerStateWaiting, out *ContainerStateWaiting, c *conversion.Cloner) error {
 	out.Reason = in.Reason
+	out.Message = in.Message
 	return nil
 }
 
@@ -318,6 +319,11 @@ func deepCopy_api_ContainerStatus(in ContainerStatus, out *ContainerStatus, c *c
 	out.Image = in.Image
 	out.ImageID = in.ImageID
 	out.ContainerID = in.ContainerID
+	return nil
+}
+
+func deepCopy_api_DaemonEndpoint(in DaemonEndpoint, out *DaemonEndpoint, c *conversion.Cloner) error {
+	out.Port = in.Port
 	return nil
 }
 
@@ -391,6 +397,16 @@ func deepCopy_api_EndpointSubset(in EndpointSubset, out *EndpointSubset, c *conv
 		}
 	} else {
 		out.Addresses = nil
+	}
+	if in.NotReadyAddresses != nil {
+		out.NotReadyAddresses = make([]EndpointAddress, len(in.NotReadyAddresses))
+		for i := range in.NotReadyAddresses {
+			if err := deepCopy_api_EndpointAddress(in.NotReadyAddresses[i], &out.NotReadyAddresses[i], c); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.NotReadyAddresses = nil
 	}
 	if in.Ports != nil {
 		out.Ports = make([]EndpointPort, len(in.Ports))
@@ -869,6 +885,7 @@ func deepCopy_api_NamespaceSpec(in NamespaceSpec, out *NamespaceSpec, c *convers
 	} else {
 		out.Finalizers = nil
 	}
+	out.NetworkPolicy = in.NetworkPolicy
 	return nil
 }
 
@@ -910,6 +927,13 @@ func deepCopy_api_NodeCondition(in NodeCondition, out *NodeCondition, c *convers
 	}
 	out.Reason = in.Reason
 	out.Message = in.Message
+	return nil
+}
+
+func deepCopy_api_NodeDaemonEndpoints(in NodeDaemonEndpoints, out *NodeDaemonEndpoints, c *conversion.Cloner) error {
+	if err := deepCopy_api_DaemonEndpoint(in.KubeletEndpoint, &out.KubeletEndpoint, c); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -974,6 +998,9 @@ func deepCopy_api_NodeStatus(in NodeStatus, out *NodeStatus, c *conversion.Clone
 		}
 	} else {
 		out.Addresses = nil
+	}
+	if err := deepCopy_api_NodeDaemonEndpoints(in.DaemonEndpoints, &out.DaemonEndpoints, c); err != nil {
+		return err
 	}
 	if err := deepCopy_api_NodeSystemInfo(in.NodeInfo, &out.NodeInfo, c); err != nil {
 		return err
@@ -1430,6 +1457,7 @@ func deepCopy_api_PodSpec(in PodSpec, out *PodSpec, c *conversion.Cloner) error 
 	out.ServiceAccountName = in.ServiceAccountName
 	out.NodeName = in.NodeName
 	out.HostNetwork = in.HostNetwork
+	out.HostPID = in.HostPID
 	if in.ImagePullSecrets != nil {
 		out.ImagePullSecrets = make([]LocalObjectReference, len(in.ImagePullSecrets))
 		for i := range in.ImagePullSecrets {
@@ -1958,6 +1986,7 @@ func deepCopy_api_ServicePort(in ServicePort, out *ServicePort, c *conversion.Cl
 }
 
 func deepCopy_api_ServiceSpec(in ServiceSpec, out *ServiceSpec, c *conversion.Cloner) error {
+	out.Type = in.Type
 	if in.Ports != nil {
 		out.Ports = make([]ServicePort, len(in.Ports))
 		for i := range in.Ports {
@@ -1977,7 +2006,6 @@ func deepCopy_api_ServiceSpec(in ServiceSpec, out *ServiceSpec, c *conversion.Cl
 		out.Selector = nil
 	}
 	out.ClusterIP = in.ClusterIP
-	out.Type = in.Type
 	if in.ExternalIPs != nil {
 		out.ExternalIPs = make([]string, len(in.ExternalIPs))
 		for i := range in.ExternalIPs {
@@ -1986,6 +2014,7 @@ func deepCopy_api_ServiceSpec(in ServiceSpec, out *ServiceSpec, c *conversion.Cl
 	} else {
 		out.ExternalIPs = nil
 	}
+	out.LoadBalancerIP = in.LoadBalancerIP
 	out.SessionAffinity = in.SessionAffinity
 	return nil
 }
@@ -2236,6 +2265,7 @@ func init() {
 		deepCopy_api_ContainerStateTerminated,
 		deepCopy_api_ContainerStateWaiting,
 		deepCopy_api_ContainerStatus,
+		deepCopy_api_DaemonEndpoint,
 		deepCopy_api_DeleteOptions,
 		deepCopy_api_DownwardAPIVolumeFile,
 		deepCopy_api_DownwardAPIVolumeSource,
@@ -2277,6 +2307,7 @@ func init() {
 		deepCopy_api_Node,
 		deepCopy_api_NodeAddress,
 		deepCopy_api_NodeCondition,
+		deepCopy_api_NodeDaemonEndpoints,
 		deepCopy_api_NodeList,
 		deepCopy_api_NodeSpec,
 		deepCopy_api_NodeStatus,

@@ -29,9 +29,10 @@ import (
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/testapi"
 	"k8s.io/kubernetes/pkg/api/v1"
-	"k8s.io/kubernetes/pkg/expapi"
+	"k8s.io/kubernetes/pkg/apis/experimental"
 	"k8s.io/kubernetes/pkg/runtime"
 	"k8s.io/kubernetes/pkg/util"
+	"k8s.io/kubernetes/pkg/util/sets"
 
 	"github.com/ghodss/yaml"
 )
@@ -49,7 +50,7 @@ func (ts *testStruct) IsAnAPIObject() {}
 
 func init() {
 	api.Scheme.AddKnownTypes("", &testStruct{})
-	api.Scheme.AddKnownTypes(testapi.Version(), &testStruct{})
+	api.Scheme.AddKnownTypes(testapi.Default.Version(), &testStruct{})
 }
 
 var testData = testStruct{
@@ -72,7 +73,7 @@ func TestVersionedPrinter(t *testing.T) {
 			return nil
 		}),
 		api.Scheme,
-		testapi.Version(),
+		testapi.Default.Version(),
 	)
 	if err := p.PrintObj(original, nil); err != nil {
 		t.Errorf("unexpected error: %v", err)
@@ -110,7 +111,7 @@ func TestPrinter(t *testing.T) {
 		},
 	}
 	emptyListTest := &api.PodList{}
-	testapi, err := api.Scheme.ConvertToVersion(podTest, testapi.Version())
+	testapi, err := api.Scheme.ConvertToVersion(podTest, testapi.Default.Version())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -183,7 +184,7 @@ func testPrinter(t *testing.T, printer ResourcePrinter, unmarshalFunc func(data 
 	}
 	// Use real decode function to undo the versioning process.
 	poutput = testStruct{}
-	err = runtime.YAMLDecoder(testapi.Codec()).DecodeInto(buf.Bytes(), &poutput)
+	err = runtime.YAMLDecoder(testapi.Default.Codec()).DecodeInto(buf.Bytes(), &poutput)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +205,7 @@ func testPrinter(t *testing.T, printer ResourcePrinter, unmarshalFunc func(data 
 	}
 	// Use real decode function to undo the versioning process.
 	objOut = api.Pod{}
-	err = runtime.YAMLDecoder(testapi.Codec()).DecodeInto(buf.Bytes(), &objOut)
+	err = runtime.YAMLDecoder(testapi.Default.Codec()).DecodeInto(buf.Bytes(), &objOut)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -430,7 +431,7 @@ func TestTemplateStrings(t *testing.T) {
 		t.Fatalf("tmpl fail: %v", err)
 	}
 
-	printer := NewVersionedPrinter(p, api.Scheme, testapi.Version())
+	printer := NewVersionedPrinter(p, api.Scheme, testapi.Default.Version())
 
 	for name, item := range table {
 		buffer := &bytes.Buffer{}
@@ -484,9 +485,9 @@ func TestPrinters(t *testing.T) {
 			}}},
 	}
 	// map of printer name to set of objects it should fail on.
-	expectedErrors := map[string]util.StringSet{
-		"template2": util.NewStringSet("pod", "emptyPodList", "endpoints"),
-		"jsonpath":  util.NewStringSet("emptyPodList", "nonEmptyPodList", "endpoints"),
+	expectedErrors := map[string]sets.String{
+		"template2": sets.NewString("pod", "emptyPodList", "endpoints"),
+		"jsonpath":  sets.NewString("emptyPodList", "nonEmptyPodList", "endpoints"),
 	}
 
 	for pName, p := range printers {
@@ -545,21 +546,21 @@ func TestPrintEventsResultSorted(t *testing.T) {
 	VerifyDatesInOrder(out, "\n" /* rowDelimiter */, "  " /* columnDelimiter */, t)
 }
 
-func TestPrintMinionStatus(t *testing.T) {
+func TestPrintNodeStatus(t *testing.T) {
 	printer := NewHumanReadablePrinter(false, false, false, false, []string{})
 	table := []struct {
-		minion api.Node
+		node   api.Node
 		status string
 	}{
 		{
-			minion: api.Node{
+			node: api.Node{
 				ObjectMeta: api.ObjectMeta{Name: "foo1"},
 				Status:     api.NodeStatus{Conditions: []api.NodeCondition{{Type: api.NodeReady, Status: api.ConditionTrue}}},
 			},
 			status: "Ready",
 		},
 		{
-			minion: api.Node{
+			node: api.Node{
 				ObjectMeta: api.ObjectMeta{Name: "foo2"},
 				Spec:       api.NodeSpec{Unschedulable: true},
 				Status:     api.NodeStatus{Conditions: []api.NodeCondition{{Type: api.NodeReady, Status: api.ConditionTrue}}},
@@ -567,7 +568,7 @@ func TestPrintMinionStatus(t *testing.T) {
 			status: "Ready,SchedulingDisabled",
 		},
 		{
-			minion: api.Node{
+			node: api.Node{
 				ObjectMeta: api.ObjectMeta{Name: "foo3"},
 				Status: api.NodeStatus{Conditions: []api.NodeCondition{
 					{Type: api.NodeReady, Status: api.ConditionTrue},
@@ -576,14 +577,14 @@ func TestPrintMinionStatus(t *testing.T) {
 			status: "Ready",
 		},
 		{
-			minion: api.Node{
+			node: api.Node{
 				ObjectMeta: api.ObjectMeta{Name: "foo4"},
 				Status:     api.NodeStatus{Conditions: []api.NodeCondition{{Type: api.NodeReady, Status: api.ConditionFalse}}},
 			},
 			status: "NotReady",
 		},
 		{
-			minion: api.Node{
+			node: api.Node{
 				ObjectMeta: api.ObjectMeta{Name: "foo5"},
 				Spec:       api.NodeSpec{Unschedulable: true},
 				Status:     api.NodeStatus{Conditions: []api.NodeCondition{{Type: api.NodeReady, Status: api.ConditionFalse}}},
@@ -591,21 +592,21 @@ func TestPrintMinionStatus(t *testing.T) {
 			status: "NotReady,SchedulingDisabled",
 		},
 		{
-			minion: api.Node{
+			node: api.Node{
 				ObjectMeta: api.ObjectMeta{Name: "foo6"},
 				Status:     api.NodeStatus{Conditions: []api.NodeCondition{{Type: "InvalidValue", Status: api.ConditionTrue}}},
 			},
 			status: "Unknown",
 		},
 		{
-			minion: api.Node{
+			node: api.Node{
 				ObjectMeta: api.ObjectMeta{Name: "foo7"},
 				Status:     api.NodeStatus{Conditions: []api.NodeCondition{{}}},
 			},
 			status: "Unknown",
 		},
 		{
-			minion: api.Node{
+			node: api.Node{
 				ObjectMeta: api.ObjectMeta{Name: "foo8"},
 				Spec:       api.NodeSpec{Unschedulable: true},
 				Status:     api.NodeStatus{Conditions: []api.NodeCondition{{Type: "InvalidValue", Status: api.ConditionTrue}}},
@@ -613,7 +614,7 @@ func TestPrintMinionStatus(t *testing.T) {
 			status: "Unknown,SchedulingDisabled",
 		},
 		{
-			minion: api.Node{
+			node: api.Node{
 				ObjectMeta: api.ObjectMeta{Name: "foo9"},
 				Spec:       api.NodeSpec{Unschedulable: true},
 				Status:     api.NodeStatus{Conditions: []api.NodeCondition{{}}},
@@ -624,12 +625,12 @@ func TestPrintMinionStatus(t *testing.T) {
 
 	for _, test := range table {
 		buffer := &bytes.Buffer{}
-		err := printer.PrintObj(&test.minion, buffer)
+		err := printer.PrintObj(&test.node, buffer)
 		if err != nil {
-			t.Fatalf("An error occurred printing Minion: %#v", err)
+			t.Fatalf("An error occurred printing Node: %#v", err)
 		}
 		if !contains(strings.Fields(buffer.String()), test.status) {
-			t.Fatalf("Expect printing minion %s with status %#v, got: %#v", test.minion.Name, test.status, buffer.String())
+			t.Fatalf("Expect printing node %s with status %#v, got: %#v", test.node.Name, test.status, buffer.String())
 		}
 	}
 }
@@ -1234,22 +1235,22 @@ func TestTranslateTimestamp(t *testing.T) {
 
 func TestPrintDeployment(t *testing.T) {
 	tests := []struct {
-		deployment expapi.Deployment
+		deployment experimental.Deployment
 		expect     string
 	}{
 		{
-			expapi.Deployment{
+			experimental.Deployment{
 				ObjectMeta: api.ObjectMeta{
 					Name:              "test1",
 					CreationTimestamp: util.Time{Time: time.Now().Add(1.9e9)},
 				},
-				Spec: expapi.DeploymentSpec{
+				Spec: experimental.DeploymentSpec{
 					Replicas: 5,
 					Template: &api.PodTemplateSpec{
 						Spec: api.PodSpec{Containers: make([]api.Container, 2)},
 					},
 				},
-				Status: expapi.DeploymentStatus{
+				Status: experimental.DeploymentStatus{
 					Replicas:        10,
 					UpdatedReplicas: 2,
 				},

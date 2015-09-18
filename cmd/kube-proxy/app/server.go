@@ -27,10 +27,10 @@ import (
 	"time"
 
 	"k8s.io/kubernetes/pkg/api"
+	"k8s.io/kubernetes/pkg/client/record"
 	client "k8s.io/kubernetes/pkg/client/unversioned"
 	"k8s.io/kubernetes/pkg/client/unversioned/clientcmd"
 	clientcmdapi "k8s.io/kubernetes/pkg/client/unversioned/clientcmd/api"
-	"k8s.io/kubernetes/pkg/client/unversioned/record"
 	"k8s.io/kubernetes/pkg/kubelet/qos"
 	"k8s.io/kubernetes/pkg/proxy"
 	"k8s.io/kubernetes/pkg/proxy/config"
@@ -38,6 +38,7 @@ import (
 	"k8s.io/kubernetes/pkg/proxy/userspace"
 	"k8s.io/kubernetes/pkg/types"
 	"k8s.io/kubernetes/pkg/util"
+	utildbus "k8s.io/kubernetes/pkg/util/dbus"
 	"k8s.io/kubernetes/pkg/util/exec"
 	utiliptables "k8s.io/kubernetes/pkg/util/iptables"
 	nodeutil "k8s.io/kubernetes/pkg/util/node"
@@ -105,7 +106,8 @@ func (s *ProxyServer) Run(_ []string) error {
 	// remove iptables rules and exit
 	if s.CleanupAndExit {
 		execer := exec.New()
-		ipt := utiliptables.New(execer, protocol)
+		dbus := utildbus.New()
+		ipt := utiliptables.New(execer, dbus, protocol)
 		encounteredError := userspace.CleanupLeftovers(ipt)
 		encounteredError = iptables.CleanupLeftovers(ipt) || encounteredError
 		if encounteredError {
@@ -159,25 +161,29 @@ func (s *ProxyServer) Run(_ []string) error {
 		Namespace: "",
 	}
 
-	// Birth Cry
-	s.birthCry()
-
 	serviceConfig := config.NewServiceConfig()
 	endpointsConfig := config.NewEndpointsConfig()
 
 	var proxier proxy.ProxyProvider
 	var endpointsHandler config.EndpointsConfigHandler
 
-	// guaranteed false on error, error only necessary for debugging
-	shouldUseIptables, err := iptables.ShouldUseIptablesProxier()
-	if err != nil {
-		glog.Errorf("Can't determine whether to use iptables or userspace, using userspace proxier: %v", err)
+	execer := exec.New()
+	dbus := utildbus.New()
+	ipt := utiliptables.New(execer, dbus, protocol)
+
+	shouldUseIptables := false
+	if !s.ForceUserspaceProxy {
+		var err error
+		// guaranteed false on error, error only necessary for debugging
+		shouldUseIptables, err = iptables.ShouldUseIptablesProxier()
+		if err != nil {
+			glog.Errorf("Can't determine whether to use iptables proxy, using userspace proxier: %v", err)
+		}
 	}
-	if !s.ForceUserspaceProxy && shouldUseIptables {
+
+	if shouldUseIptables {
 		glog.V(2).Info("Using iptables Proxier.")
 
-		execer := exec.New()
-		ipt := utiliptables.New(execer, protocol)
 		proxierIptables, err := iptables.NewProxier(ipt, execer, s.SyncPeriod, s.MasqueradeAll)
 		if err != nil {
 			glog.Fatalf("Unable to create proxier: %v", err)
@@ -196,17 +202,18 @@ func (s *ProxyServer) Run(_ []string) error {
 		// set EndpointsConfigHandler to our loadBalancer
 		endpointsHandler = loadBalancer
 
-		execer := exec.New()
-		ipt := utiliptables.New(execer, protocol)
 		proxierUserspace, err := userspace.NewProxier(loadBalancer, s.BindAddress, ipt, s.PortRange, s.SyncPeriod)
 		if err != nil {
-			glog.Fatalf("Unable to create proxer: %v", err)
+			glog.Fatalf("Unable to create proxier: %v", err)
 		}
 		proxier = proxierUserspace
 		// Remove artifacts from the pure-iptables Proxier.
 		glog.V(2).Info("Tearing down pure-iptables proxy rules. Errors here are acceptable.")
 		iptables.CleanupLeftovers(ipt)
 	}
+
+	// Birth Cry after the birth is successful
+	s.birthCry()
 
 	// Wire proxier to handle changes to services
 	serviceConfig.RegisterHandler(proxier)
@@ -232,6 +239,8 @@ func (s *ProxyServer) Run(_ []string) error {
 			}
 		}, 5*time.Second, util.NeverStop)
 	}
+
+	ipt.AddReloadFunc(proxier.Sync)
 
 	// Just loop forever for now...
 	proxier.SyncLoop()
