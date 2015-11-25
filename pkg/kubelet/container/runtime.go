@@ -147,6 +147,8 @@ type Pod struct {
 	// List of containers that belongs to this pod. It may contain only
 	// running containers, or mixed with dead ones (when GetPods(true)).
 	Containers []*Container
+
+	PodInfraContainerID string
 }
 
 // ContainerID is a type that identifies a container.

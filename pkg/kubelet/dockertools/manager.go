@@ -906,6 +906,8 @@ func (dm *DockerManager) GetPods(all bool) ([]*kubecontainer.Pod, error) {
 			continue
 		}
 
+
+
 		pod, found := pods[podUID]
 		if !found {
 			pod = &kubecontainer.Pod{
@@ -913,9 +915,16 @@ func (dm *DockerManager) GetPods(all bool) ([]*kubecontainer.Pod, error) {
 				Name:      podName,
 				Namespace: podNamespace,
 			}
-			pods[podUID] = pod
 		}
+
+		if converted.Name == PodInfraContainerName {
+			glog.V(4).Infof("Got PodInfraContainerID %v for pod %v", converted.ID.ID, podName)
+			pod.PodInfraContainerID = converted.ID.ID
+		}
+
 		pod.Containers = append(pod.Containers, converted)
+
+		pods[podUID] = pod
 	}
 
 	// Convert map to list.
@@ -1311,9 +1320,11 @@ func (dm *DockerManager) KillPod(pod *api.Pod, runningPod kubecontainer.Pod) err
 				glog.Errorf("Failed to delete container: %v; Skipping pod %q", err, runningPod.ID)
 				errs <- err
 			}
+
 		}(container)
 	}
 	wg.Wait()
+
 	if networkContainer != nil {
 		if err := dm.networkPlugin.TearDownPod(runningPod.Namespace, runningPod.Name, kubetypes.DockerID(networkContainer.ID.ID)); err != nil {
 			glog.Errorf("Failed tearing down the infra container: %v", err)
@@ -1323,7 +1334,15 @@ func (dm *DockerManager) KillPod(pod *api.Pod, runningPod kubecontainer.Pod) err
 			glog.Errorf("Failed to delete container: %v; Skipping pod %q", err, runningPod.ID)
 			errs <- err
 		}
+	} else if runningPod.PodInfraContainerID != "" {
+		glog.Infof("Calling network plugin to tear down pod ID %v", kubetypes.DockerID(runningPod.PodInfraContainerID))
+		if err := dm.networkPlugin.TearDownPod(runningPod.Namespace, runningPod.Name, kubetypes.DockerID(runningPod.PodInfraContainerID)); err != nil {
+			glog.Errorf("Failed tearing down the infra container: %v", err)
+			errs <- err
+		}
 	}
+	glog.Infof("POD ID %v", kubetypes.DockerID(runningPod.PodInfraContainerID))
+
 	close(errs)
 	if len(errs) > 0 {
 		errList := []error{}
@@ -1419,6 +1438,7 @@ func (dm *DockerManager) killContainer(containerID kubecontainer.ContainerID, co
 	if gracePeriod < minimumGracePeriodInSeconds {
 		gracePeriod = minimumGracePeriodInSeconds
 	}
+
 	err := dm.client.StopContainer(ID, uint(gracePeriod))
 	if _, ok := err.(*docker.ContainerNotRunning); ok && err != nil {
 		glog.V(4).Infof("Container %q has already exited", name)
