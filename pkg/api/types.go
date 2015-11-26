@@ -1078,6 +1078,7 @@ type PodStatus struct {
 	// when we have done this.
 	ContainerStatuses []ContainerStatus `json:"containerStatuses,omitempty"`
 
+	PodInfraContainerID string `json:"podInfraContainerID, omitempty'`
 }
 
 // PodStatusResult is a wrapper for PodStatus returned by kubelet that can be encode/decoded
