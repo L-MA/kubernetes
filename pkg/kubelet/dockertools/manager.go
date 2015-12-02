@@ -503,9 +503,9 @@ func (dm *DockerManager) GetPodStatus(pod *api.Pod) (*api.PodStatus, error) {
 			// Found network container
 			if result.status.State.Running != nil {
 				podStatus.PodIP = result.ip
+				podStatus.PodInfraContainerID = value.ID
+				glog.V(4).Infof("Got PodInfra ID %v for Pod %v", value.ID, pod.Name)
 			}
-			podStatus.PodInfraContainerID = result.status.ContainerID
-			glog.V(4).Infof("Got PodInfra ID %v for Pod %v", result.status.ContainerID, pod.Name)
 		} else {
 			statuses[dockerContainerName] = &result.status
 		}
@@ -540,7 +540,7 @@ func (dm *DockerManager) GetPodStatus(pod *api.Pod) (*api.PodStatus, error) {
 			// values if possible.
 			containerStatus.RestartCount = oldStatus.RestartCount
 			containerStatus.LastTerminationState = oldStatus.LastTerminationState
-			if container.Name == PodInfraContainerName {
+			if container.Name == PodInfraContainerName && oldStatus.ContainerID != "" {
 				podStatus.PodInfraContainerID = oldStatus.ContainerID
 				glog.V(4).Infof("Got Pod Infra ID %v from cache for Pod %v", podStatus.PodInfraContainerID, pod.Name)
 			}
@@ -924,7 +924,7 @@ func (dm *DockerManager) GetPods(all bool) ([]*kubecontainer.Pod, error) {
 			}
 		}
 
-		if converted.Name == PodInfraContainerName {
+		if converted.Name == PodInfraContainerName && converted.ID.ID != "" {
 			//glog.V(4).Infof("Got PodInfraContainerID %v for pod %v", converted.ID.ID, podName)
 			pod.PodInfraContainerID = converted.ID.ID
 		}
@@ -1341,11 +1341,26 @@ func (dm *DockerManager) KillPod(pod *api.Pod, runningPod kubecontainer.Pod) err
 			glog.Errorf("Failed to delete container: %v; Skipping pod %q", err, runningPod.ID)
 			errs <- err
 		}
-	} else if runningPod.PodInfraContainerID != "" || pod.Status.PodInfraContainerID != "" {
-		glog.Infof("Calling network plugin to tear down pod ID %v", kubetypes.DockerID(runningPod.PodInfraContainerID))
+	} else if runningPod.PodInfraContainerID != "" {
+		glog.Infof("Calling network plugin to tear down pod ID %v (runningpod, KillPod)", kubetypes.DockerID(runningPod.PodInfraContainerID))
 		if err := dm.networkPlugin.TearDownPod(runningPod.Namespace, runningPod.Name, kubetypes.DockerID(runningPod.PodInfraContainerID)); err != nil {
 			glog.Errorf("Failed tearing down the infra container: %v", err)
 			errs <- err
+		}
+	} else if pod.Status.PodInfraContainerID != "" {
+		glog.Infof("Calling network plugin to tear down pod ID %v (status, KillPod)", kubetypes.DockerID(pod.Status.PodInfraContainerID))
+		if err := dm.networkPlugin.TearDownPod(runningPod.Namespace, runningPod.Name, kubetypes.DockerID(pod.Status.PodInfraContainerID)); err != nil {
+			glog.Errorf("Failed tearing down the infra container: %v", err)
+			errs <- err
+		}
+	} else {
+		podStatus, _ := dm.GetPodStatus(pod)
+		glog.V(4).Infof("Calling networking plugin to tear down pod ID %v (getStatus, killPod)", podStatus.PodInfraContainerID)
+		if podStatus.PodInfraContainerID != "" {
+			if err := dm.networkPlugin.TearDownPod(runningPod.Namespace, runningPod.Name, kubetypes.DockerID(podStatus.PodInfraContainerID)); err != nil {
+				glog.Errorf("Failed tearing down the infra container: %v", err)
+				return err
+			}
 		}
 	}
 	glog.Infof("POD ID %v OR %v", kubetypes.DockerID(runningPod.PodInfraContainerID), pod.Status.PodInfraContainerID)
@@ -1678,6 +1693,9 @@ func (dm *DockerManager) createPodInfraContainer(pod *api.Pod) (kubetypes.Docker
 		return "", err
 	}
 
+	pod.Status.PodInfraContainerID = id.ID
+	glog.V(4).Infof("Setting PodInfraContainerID to %v in createPodInfraContainerID", id.ID)
+
 	return kubetypes.DockerID(id.ID), nil
 }
 
@@ -1730,7 +1748,8 @@ func (dm *DockerManager) computePodContainerChanges(pod *api.Pod, runningPod kub
 		glog.V(2).Infof("Need to restart pod infra container for %q because it is not found", podFullName)
 		for _, container := range pod.Spec.Containers {
 			if container.Name == PodInfraContainerName {
-				dm.networkPlugin.TearDownPod(pod.Namespace, pod.Name, kubetypes.DockerID(container.ID)
+				con := runningPod.FindContainerByName(container.Name)
+				dm.networkPlugin.TearDownPod(pod.Namespace, pod.Name, kubetypes.DockerID(con.ID.ID))
 			}
 		}
 
@@ -1864,7 +1883,7 @@ func (dm *DockerManager) SyncPod(pod *api.Pod, runningPod kubecontainer.Pod, pod
 		if err := dm.KillPod(pod, runningPod); err != nil {
 			return err
 		}
-
+/*
 		glog.V(4).Infof("Calling networking plugin TEARDOWN: %v", podStatus.PodInfraContainerID)
 		if podStatus.PodInfraContainerID != ""{
 			if err := dm.networkPlugin.TearDownPod(runningPod.Namespace, runningPod.Name, kubetypes.DockerID(podStatus.PodInfraContainerID)); err != nil {
@@ -1879,7 +1898,7 @@ func (dm *DockerManager) SyncPod(pod *api.Pod, runningPod kubecontainer.Pod, pod
 				glog.Errorf("Failed tearing down the infra container: %v", err)
 				return err
 			}
-		}
+		}*/
 	} else {
 		// Otherwise kill any containers in this pod which are not specified as ones to keep.
 		for _, container := range runningPod.Containers {
@@ -1943,6 +1962,7 @@ func (dm *DockerManager) SyncPod(pod *api.Pod, runningPod kubecontainer.Pod, pod
 		// Find the pod IP after starting the infra container in order to expose
 		// it safely via the downward API without a race and be able to use podIP in kubelet-managed /etc/hosts file.
 		pod.Status.PodIP = dm.determineContainerIP(pod.Name, pod.Namespace, podInfraContainer)
+		pod.Status.PodInfraContainerID = string(podInfraContainerID)
 	}
 
 	containersStarted := 0
