@@ -336,6 +336,28 @@ func (dm *DockerManager) determineContainerIP(podNamespace, podName string, cont
 	return result
 }
 
+func (dm *DockerManager) getPodInfraContainerID(dockerID string) string {
+	inspectResult, err := dm.client.InspectContainer(dockerID)
+	if err != nil {
+		glog.Errorf("Received an error from InspectContainer for container ID %v", dockerID)
+		return ""
+	}
+
+	if inspectResult == nil {
+		glog.Errorf("Received a nil result from InspectContainer without receiving an error for container ID %v", dockerID)
+		return ""
+	}
+
+	var resolveConfPath string
+	resolveConfPath = inspectResult.ResolvConfPath
+	glog.V(4).Infof("Extracted ResolveConfPath %v", resolveConfPath)
+
+	spl := strings.Split(resolveConfPath, "/")
+	glog.V(4).Infof("Extracted PodInfraContainerID %v", spl[5])
+
+	return spl[5]
+}
+
 func (dm *DockerManager) inspectContainer(dockerID, containerName string, pod *api.Pod) *containerStatusResult {
 	result := containerStatusResult{api.ContainerStatus{}, "", nil}
 
@@ -1279,7 +1301,9 @@ func (dm *DockerManager) KillPod(pod *api.Pod, runningPod kubecontainer.Pod) err
 	var (
 		networkContainer *kubecontainer.Container
 		networkSpec      *api.Container
+		networkInfraID   string
 	)
+	networkInfraID = ""
 	for _, container := range runningPod.Containers {
 		wg.Add(1)
 		go func(container *kubecontainer.Container) {
@@ -1295,6 +1319,15 @@ func (dm *DockerManager) KillPod(pod *api.Pod, runningPod kubecontainer.Pod) err
 					}
 				}
 			}
+
+			tempNetworkInfraID := dm.getPodInfraContainerID(container.ID.ID)
+			if networkInfraID == "" {
+				glog.V(4).Infof("Setting networkInfraID to %v", tempNetworkInfraID)
+				networkInfraID = tempNetworkInfraID
+			} else if networkInfraID != tempNetworkInfraID {
+				glog.Errorf("Mismatching InfraContainerIDs: %v, %v", networkInfraID, tempNetworkInfraID)
+			}
+
 
 			// TODO: Handle this without signaling the pod infra container to
 			// adapt to the generic container runtime.
@@ -1323,7 +1356,13 @@ func (dm *DockerManager) KillPod(pod *api.Pod, runningPod kubecontainer.Pod) err
 			glog.Errorf("Failed to delete container: %v; Skipping pod %q", err, runningPod.ID)
 			errs <- err
 		}
-	}
+	} else if networkInfraID != "" {
+        glog.Errorf("Calling network teardown with InfraID %v", networkInfraID)
+	    if err := dm.networkPlugin.TearDownPod(runningPod.Namespace, runningPod.Name, kubetypes.DockerID(networkInfraID)); err != nil {
+			glog.Errorf("Failed tearing down the infra container: %v", err)
+			errs <- err
+		}
+    }
 	close(errs)
 	if len(errs) > 0 {
 		errList := []error{}
