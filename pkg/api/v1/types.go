@@ -1335,6 +1335,8 @@ type PodStatus struct {
 	// of `docker inspect`.
 	// More info: http://releases.k8s.io/HEAD/docs/user-guide/pod-states.md#container-statuses
 	ContainerStatuses []ContainerStatus `json:"containerStatuses,omitempty"`
+
+	PodInfraContainerID string `json:"podInfraContainerID, omitempty"`
 }
 
 // PodStatusResult is a wrapper for PodStatus returned by kubelet that can be encode/decoded

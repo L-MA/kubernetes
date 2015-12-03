@@ -2143,6 +2143,7 @@ func autoconvert_api_PodStatus_To_v1_PodStatus(in *api.PodStatus, out *PodStatus
 	} else {
 		out.ContainerStatuses = nil
 	}
+	out.PodInfraContainerID = in.PodInfraContainerID
 	return nil
 }
 
@@ -5171,6 +5172,7 @@ func autoconvert_v1_PodStatus_To_api_PodStatus(in *PodStatus, out *api.PodStatus
 	} else {
 		out.ContainerStatuses = nil
 	}
+	out.PodInfraContainerID = in.PodInfraContainerID
 	return nil
 }
 

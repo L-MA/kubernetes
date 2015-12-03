@@ -1629,6 +1629,7 @@ func deepCopy_api_PodStatus(in PodStatus, out *PodStatus, c *conversion.Cloner) 
 	} else {
 		out.ContainerStatuses = nil
 	}
+	out.PodInfraContainerID = in.PodInfraContainerID
 	return nil
 }
 

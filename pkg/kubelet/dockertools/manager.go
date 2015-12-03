@@ -336,6 +336,26 @@ func (dm *DockerManager) determineContainerIP(podNamespace, podName string, cont
 	return result
 }
 
+func (dm *DockerManager) getPodInfraContainerID(dockerID string) string {
+	inspectResult, err := dm.client.InspectContainer(dockerID)
+	if err != nil {
+	}
+
+	if inspectResult == nil {
+		glog.Errorf("Received a nil result from InspectContainer without receiving an error for container ID %v", dockerID)
+	}
+
+	var resolveConfPath string
+	resolveConfPath = inspectResult.ResolvConfPath
+	glog.V(4).Infof("Extracted ResolveConfPath %v", resolveConfPath)
+
+	spl := strings.Split(resolveConfPath, "/")
+	glog.V(4).Infof("Extracted PodInfraContainerID %v", spl[5])
+
+	return spl[5]
+
+}
+
 func (dm *DockerManager) inspectContainer(dockerID, containerName string, pod *api.Pod) *containerStatusResult {
 	result := containerStatusResult{api.ContainerStatus{}, "", nil}
 
@@ -483,7 +503,8 @@ func (dm *DockerManager) GetPodStatus(pod *api.Pod) (*api.PodStatus, error) {
 		if containerDone.Has(dockerContainerName) {
 			continue
 		}
-
+		podInfraID := dm.getPodInfraContainerID(value.ID)
+		podStatus.PodInfraContainerID = podInfraID
 		// Inspect the container.
 		result := dm.inspectContainer(value.ID, dockerContainerName, pod)
 		if result.err != nil {
@@ -503,8 +524,8 @@ func (dm *DockerManager) GetPodStatus(pod *api.Pod) (*api.PodStatus, error) {
 			// Found network container
 			if result.status.State.Running != nil {
 				podStatus.PodIP = result.ip
-				podStatus.PodInfraContainerID = value.ID
-				glog.V(4).Infof("Got PodInfra ID %v for Pod %v", value.ID, pod.Name)
+				//podStatus.PodInfraContainerID = value.ID
+				//glog.V(4).Infof("Got PodInfra ID %v for Pod %v", value.ID, pod.Name)
 			}
 		} else {
 			statuses[dockerContainerName] = &result.status
